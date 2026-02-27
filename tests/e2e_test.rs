@@ -2,7 +2,7 @@
 //!
 //! Requires the full infrastructure stack to be running before executing:
 //!
-//!   docker compose up -d postgres zookeeper kafka debezium
+//!   docker compose up -d postgres kafka debezium
 //!
 //! The easiest way to run this test is via the helper script:
 //!

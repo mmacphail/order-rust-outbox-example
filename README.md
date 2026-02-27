@@ -48,7 +48,7 @@ named after the `aggregate_type` column (e.g. `"Order"`).
 ### 1. Start the infrastructure
 
 ```bash
-docker compose up -d postgres zookeeper kafka debezium
+docker compose up -d postgres kafka debezium
 ```
 
 ### 2. Run the service locally
