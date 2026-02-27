@@ -27,7 +27,7 @@ cd "$REPO_ROOT"
 teardown() {
   if [[ "$TEARDOWN" == "true" ]]; then
     echo "==> Stopping Docker Compose services..."
-    docker compose down -v --remove-orphans
+    docker-compose down -v --remove-orphans
   else
     echo "==> --no-teardown set; leaving services running."
   fi
@@ -36,19 +36,19 @@ trap teardown EXIT
 
 # ── 1. Start infrastructure services (not the order_service – we run it in the test process)
 echo "==> Starting infrastructure services..."
-docker compose up -d postgres kafka debezium
+docker-compose up -d postgres kafka debezium
 
 # ── 2. Wait for Postgres
 echo "==> Waiting for Postgres to be healthy..."
-until docker compose exec -T postgres pg_isready -U order_user -d order_db > /dev/null 2>&1; do
+until docker-compose exec -T postgres pg_isready -U order_user -d order_db > /dev/null 2>&1; do
   sleep 2
 done
 echo "    Postgres is ready."
 
 # ── 3. Wait for Kafka
 echo "==> Waiting for Kafka to be healthy..."
-until docker compose exec -T kafka \
-    kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
+until docker-compose exec -T kafka \
+    /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
   sleep 3
 done
 echo "    Kafka is ready."
