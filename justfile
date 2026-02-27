@@ -52,19 +52,19 @@ test-e2e-no-teardown:
 
 # Start all infrastructure services (Postgres, Zookeeper, Kafka, Debezium)
 infra-up:
-    docker-compose up -d postgres zookeeper kafka debezium
+    docker compose up -d postgres zookeeper kafka debezium
 
 # Start the full stack including the order service
 up:
-    docker-compose up --build -d
+    docker compose up --build -d
 
 # Stop and remove all containers and volumes
 down:
-    docker-compose down -v --remove-orphans
+    docker compose down -v --remove-orphans
 
 # Show logs for all services (or pass a service name, e.g. just logs postgres)
 logs service="":
-    docker-compose logs -f {{ service }}
+    docker compose logs -f {{ service }}
 
 # ── Debezium ───────────────────────────────────────────────────────────────────
 
