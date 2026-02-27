@@ -36,7 +36,7 @@ trap teardown EXIT
 
 # ── 1. Start infrastructure services (not the order_service – we run it in the test process)
 echo "==> Starting infrastructure services..."
-docker compose up -d postgres kafka schema-registry debezium
+docker-compose up -d postgres kafka schema-registry debezium
 
 # ── 2. Wait for Postgres
 echo "==> Waiting for Postgres to be healthy..."
@@ -55,7 +55,7 @@ echo "    Kafka is ready."
 
 # ── 4. Wait for Schema Registry
 echo "==> Waiting for Schema Registry..."
-until curl -sf http://localhost:8081/health/ready > /dev/null 2>&1; do
+until curl -sf http://localhost:8081/subjects > /dev/null 2>&1; do
   sleep 3
 done
 echo "    Schema Registry is ready."

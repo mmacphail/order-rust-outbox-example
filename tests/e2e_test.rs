@@ -2,7 +2,7 @@
 //!
 //! Requires the full infrastructure stack to be running before executing:
 //!
-//!   docker compose up -d postgres kafka schema-registry debezium
+//!   docker-compose up -d postgres kafka schema-registry debezium
 //!
 //! The easiest way to run this test is via the helper script:
 //!
@@ -88,11 +88,8 @@ async fn register_debezium_connector(http: &Client) {
             "transforms.outbox.route.by.field": "aggregate_type",
             "transforms.outbox.route.topic.replacement": "${routedByValue}",
             "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-            "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
-            "value.converter.apicurio.registry.url": "http://schema-registry:8080/apis/registry/v2",
-            "value.converter.apicurio.registry.auto-register": "true",
-            "value.converter.apicurio.registry.find-latest": "true",
-            "value.converter.apicurio.registry.id-handler": "io.apicurio.registry.serde.Legacy4ByteIdHandler"
+            "value.converter": "io.confluent.connect.avro.AvroConverter",
+            "value.converter.schema.registry.url": "http://schema-registry:8081"
         }
     });
 
@@ -179,7 +176,7 @@ async fn test_create_order_event_reaches_kafka() {
     // ── 2. Register the Debezium connector ──────────────────────────────────
     wait_for_http(
         "Schema Registry",
-        &format!("{}/health/ready", SCHEMA_REGISTRY_URL),
+        &format!("{}/subjects", SCHEMA_REGISTRY_URL),
         Duration::from_secs(60),
         Duration::from_secs(2),
     )
