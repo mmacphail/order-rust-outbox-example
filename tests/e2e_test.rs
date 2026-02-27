@@ -108,12 +108,12 @@ async fn register_debezium_connector(http: &Client) {
     );
 }
 
-/// Poll the Debezium connector status until it reports RUNNING.
+/// Poll the Debezium connector status until both the connector and its task report RUNNING.
 async fn wait_for_connector_running(http: &Client) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         if tokio::time::Instant::now() > deadline {
-            panic!("Debezium connector did not reach RUNNING state within 30 s");
+            panic!("Debezium connector did not reach RUNNING state within 60 s");
         }
         let resp = http
             .get(format!(
@@ -125,8 +125,33 @@ async fn wait_for_connector_running(http: &Client) {
 
         if let Ok(r) = resp {
             if let Ok(v) = r.json::<Value>().await {
-                if v["connector"]["state"].as_str() == Some("RUNNING") {
+                let connector_running =
+                    v["connector"]["state"].as_str() == Some("RUNNING");
+                let task_running = v["tasks"]
+                    .as_array()
+                    .and_then(|tasks| tasks.first())
+                    .and_then(|t| t["state"].as_str())
+                    == Some("RUNNING");
+
+                if connector_running && task_running {
                     return;
+                }
+
+                // Fail fast if the task is in a terminal FAILED state.
+                let task_failed = v["tasks"]
+                    .as_array()
+                    .and_then(|tasks| tasks.first())
+                    .and_then(|t| t["state"].as_str())
+                    == Some("FAILED");
+                if task_failed {
+                    let trace = v["tasks"][0]["trace"]
+                        .as_str()
+                        .unwrap_or("<no trace>")
+                        .lines()
+                        .take(5)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    panic!("Debezium connector task entered FAILED state:\n{}", trace);
                 }
             }
         }
