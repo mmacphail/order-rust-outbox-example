@@ -48,7 +48,11 @@ echo "    Postgres is ready."
 # ── 3. Wait for Kafka
 echo "==> Waiting for Kafka to be healthy..."
 until docker-compose exec -T kafka \
+<<<<<<< copilot/use-docker-compose
     kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
+=======
+    /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
+>>>>>>> main
   sleep 3
 done
 echo "    Kafka is ready."
