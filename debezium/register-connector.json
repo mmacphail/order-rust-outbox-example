@@ -21,7 +21,10 @@
     "transforms.outbox.route.topic.replacement": "${routedByValue}",
     "transforms.outbox.table.fields.additional.placement": "event_type:header:eventType",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": "false"
+    "value.converter": "io.apicurio.registry.utils.converter.AvroConverter",
+    "value.converter.apicurio.registry.url": "http://schema-registry:8080/apis/registry/v2",
+    "value.converter.apicurio.registry.auto-register": "true",
+    "value.converter.apicurio.registry.find-latest": "true",
+    "value.converter.apicurio.registry.id-handler": "io.apicurio.registry.serde.Legacy4ByteIdHandler"
   }
 }

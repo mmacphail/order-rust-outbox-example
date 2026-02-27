@@ -6,6 +6,7 @@ A Rust backend API demonstrating the **Transactional Outbox Pattern** with:
 - **[Diesel](https://diesel.rs/)** – PostgreSQL ORM with compile-time query safety
 - **[Debezium](https://debezium.io/)** – Change Data Capture (CDC) connector
 - **[Apache Kafka](https://kafka.apache.org/)** – Event streaming platform
+- **[Apicurio Schema Registry](https://www.apicur.io/registry/)** – Avro schema registry
 - **PostgreSQL** – Primary datastore with logical replication enabled
 
 ## Domain Model
@@ -30,13 +31,29 @@ The service manages an **Order** aggregate consisting of:
 └─────────────────────────────────────┘              ▼
                                               Kafka Topic
                                               "Order"
+                                         (Avro-encoded)
 ```
 
 When an order is created the API writes the order, its lines, and an
 `OrderCreated` outbox event **in a single database transaction**.
 Debezium reads new rows from the `outbox` table via PostgreSQL logical
-replication (CDC) and publishes the `payload` JSON to the Kafka topic
-named after the `aggregate_type` column (e.g. `"Order"`).
+replication (CDC) and publishes the `payload` as an **Avro-encoded** message
+to the Kafka topic named after the `aggregate_type` column (e.g. `"Order"`).
+Schemas are registered and versioned in the **Apicurio Schema Registry**.
+
+## Serialization Format
+
+Kafka messages use the **Confluent/Apicurio wire format**:
+
+| Bytes | Content |
+|-------|---------|
+| 0 | Magic byte (`0x00`) |
+| 1–4 | 4-byte artifact/schema ID (big-endian int) |
+| 5+ | Avro binary-encoded payload |
+
+The `payload` field from the outbox table (PostgreSQL `JSONB`) is serialized as
+an Avro `string`. Schemas are auto-registered in Apicurio under the subject
+`<topic>-value` (e.g. `Order-value`).
 
 ## Prerequisites
 
@@ -48,7 +65,7 @@ named after the `aggregate_type` column (e.g. `"Order"`).
 ### 1. Start the infrastructure
 
 ```bash
-docker compose up -d postgres kafka debezium
+docker compose up -d postgres kafka schema-registry debezium
 ```
 
 ### 2. Run the service locally
@@ -73,6 +90,10 @@ curl -X POST http://localhost:8083/connectors \
   -H "Content-Type: application/json" \
   -d @debezium/register-connector.json
 ```
+
+The connector uses `io.apicurio.registry.utils.converter.AvroConverter` to
+serialize messages and automatically registers schemas in the Apicurio Registry
+at `http://localhost:8081`.
 
 ## API Endpoints
 

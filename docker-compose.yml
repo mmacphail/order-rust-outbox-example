@@ -45,6 +45,16 @@ services:
       timeout: 10s
       retries: 10
 
+  schema-registry:
+    image: quay.io/apicurio/apicurio-registry-mem:2.4.2.Final
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   debezium:
     image: debezium/connect:2.6
     ports:
@@ -55,14 +65,13 @@ services:
       CONFIG_STORAGE_TOPIC: debezium_configs
       OFFSET_STORAGE_TOPIC: debezium_offsets
       STATUS_STORAGE_TOPIC: debezium_statuses
-      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
-      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      ENABLE_APICURIO_CONVERTERS: "true"
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      schema-registry:
         condition: service_healthy
 
   order_service:
