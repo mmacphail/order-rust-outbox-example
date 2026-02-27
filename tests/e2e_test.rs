@@ -1,8 +1,8 @@
-//! End-to-end test: POST /orders → Debezium CDC → Kafka topic "Order".
+//! End-to-end test: POST /orders → Debezium CDC → Avro → Kafka topic "Order".
 //!
 //! Requires the full infrastructure stack to be running before executing:
 //!
-//!   docker-compose up -d postgres kafka debezium
+//!   docker-compose up -d postgres kafka schema-registry debezium
 //!
 //! The easiest way to run this test is via the helper script:
 //!
@@ -24,6 +24,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 const DEBEZIUM_URL: &str = "http://localhost:8083";
+const SCHEMA_REGISTRY_URL: &str = "http://localhost:8081";
 const KAFKA_BROKERS: &str = "localhost:9092";
 const KAFKA_TOPIC: &str = "Order";
 const APP_PORT: u16 = 18080;
@@ -87,8 +88,8 @@ async fn register_debezium_connector(http: &Client) {
             "transforms.outbox.route.by.field": "aggregate_type",
             "transforms.outbox.route.topic.replacement": "${routedByValue}",
             "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-            "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-            "value.converter.schemas.enable": "false"
+            "value.converter": "io.confluent.connect.avro.AvroConverter",
+            "value.converter.schema.registry.url": "http://schema-registry:8081"
         }
     });
 
@@ -137,10 +138,13 @@ async fn wait_for_connector_running(http: &Client) {
 
 /// Full end-to-end flow:
 ///  1. Start the order service (actix-web) in a background task.
-///  2. Register the Debezium outbox connector.
+///  2. Register the Debezium outbox connector (Avro + Apicurio Schema Registry).
 ///  3. POST a new order via the REST API.
 ///  4. Consume the Kafka "Order" topic until the `OrderCreated` event matching
 ///     the new order's ID is received (up to 60 seconds).
+///
+/// Messages are serialized as Avro using the Confluent wire format
+/// (magic byte 0x00 + 4-byte schema ID + Avro-encoded payload).
 #[tokio::test]
 #[ignore = "requires docker-compose infrastructure – run via scripts/run_e2e_tests.sh"]
 async fn test_create_order_event_reaches_kafka() {
@@ -170,6 +174,14 @@ async fn test_create_order_event_reaches_kafka() {
     let http = Client::new();
 
     // ── 2. Register the Debezium connector ──────────────────────────────────
+    wait_for_http(
+        "Schema Registry",
+        &format!("{}/subjects", SCHEMA_REGISTRY_URL),
+        Duration::from_secs(60),
+        Duration::from_secs(2),
+    )
+    .await;
+
     wait_for_http(
         "Debezium Connect",
         &format!("{}/connectors", DEBEZIUM_URL),
@@ -253,26 +265,30 @@ async fn test_create_order_event_reaches_kafka() {
             _ => continue,
         };
 
-        let payload_str = match msg.payload_view::<str>() {
-            Some(Ok(s)) => s,
-            _ => continue,
+        let raw_bytes = match msg.payload() {
+            Some(b) => b,
+            None => continue,
         };
 
-        let event: Value = match serde_json::from_str(payload_str) {
-            Ok(Value::String(inner)) => {
-                // Debezium serialises the JSONB payload as a JSON-encoded string;
-                // parse the inner string to get the actual object.
-                match serde_json::from_str(&inner) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("Failed to parse inner Kafka payload JSON: {}", e);
-                        continue;
-                    }
-                }
+        // Messages are Avro-encoded using the Confluent/Apicurio wire format:
+        // byte 0    – magic byte (0x00)
+        // bytes 1–4 – 4-byte big-endian schema/artifact ID
+        // bytes 5+  – Avro binary-encoded string (the JSONB payload)
+        let json_str = match decode_avro_string_payload(raw_bytes) {
+            Some(s) => s,
+            None => {
+                eprintln!(
+                    "Failed to decode Avro payload ({} bytes)",
+                    raw_bytes.len()
+                );
+                continue;
             }
+        };
+
+        let event: Value = match serde_json::from_str(&json_str) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("Failed to parse Kafka message as JSON: {}", e);
+                eprintln!("Failed to parse Kafka payload as JSON: {}", e);
                 continue;
             }
         };
@@ -326,4 +342,56 @@ async fn test_create_order_event_reaches_kafka() {
         "OrderCreated event for order '{}' was not received on Kafka topic '{}' within {} seconds",
         order_id, KAFKA_TOPIC, KAFKA_WAIT_SECS
     );
+}
+
+// ── Avro wire format helpers ──────────────────────────────────────────────────
+
+/// Decode an Avro-encoded payload from the Confluent/Apicurio wire format.
+///
+/// Wire format: magic byte (0x00) + 4-byte schema ID + Avro binary string.
+/// The Debezium outbox EventRouter publishes the JSONB `payload` column as an
+/// Avro string, so decoding yields the raw JSON text of the order event.
+fn decode_avro_string_payload(bytes: &[u8]) -> Option<String> {
+    // Expect: magic byte 0x00 + 4-byte artifact/schema ID = 5-byte header.
+    if bytes.len() < 5 || bytes[0] != 0x00 {
+        return None;
+    }
+    let avro_bytes = &bytes[5..];
+
+    // Avro binary string encoding: zigzag long (byte count) + UTF-8 bytes.
+    let (byte_count, header_len) = read_avro_long(avro_bytes)?;
+    // A negative byte count means corrupted data (valid Avro strings have non-negative length).
+    if byte_count < 0 {
+        return None;
+    }
+    let byte_count = byte_count as usize;
+    let end = header_len + byte_count;
+    if end > avro_bytes.len() {
+        return None;
+    }
+    String::from_utf8(avro_bytes[header_len..end].to_vec()).ok()
+}
+
+/// Read a zigzag-encoded Avro long from the start of `bytes`.
+///
+/// Returns `(decoded_value, bytes_consumed)`.
+fn read_avro_long(bytes: &[u8]) -> Option<(i64, usize)> {
+    let mut n: u64 = 0;
+    let mut shift = 0u32;
+    let mut consumed = 0;
+    loop {
+        if consumed >= bytes.len() {
+            return None;
+        }
+        let b = bytes[consumed] as u64;
+        consumed += 1;
+        n |= (b & 0x7F) << shift;
+        if b & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+    }
+    // Zigzag decode: (n >> 1) XOR -(n & 1)
+    let decoded = ((n >> 1) as i64) ^ -((n & 1) as i64);
+    Some((decoded, consumed))
 }
