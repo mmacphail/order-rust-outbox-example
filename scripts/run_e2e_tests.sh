@@ -36,7 +36,7 @@ trap teardown EXIT
 
 # ── 1. Start infrastructure services (not the order_service – we run it in the test process)
 echo "==> Starting infrastructure services..."
-docker-compose up -d postgres kafka debezium
+docker-compose up -d postgres kafka schema-registry debezium
 
 # ── 2. Wait for Postgres
 echo "==> Waiting for Postgres to be healthy..."
@@ -53,14 +53,21 @@ until docker-compose exec -T kafka \
 done
 echo "    Kafka is ready."
 
-# ── 4. Wait for Debezium Connect REST API
+# ── 4. Wait for Schema Registry
+echo "==> Waiting for Schema Registry..."
+until curl -sf http://localhost:8081/subjects > /dev/null 2>&1; do
+  sleep 3
+done
+echo "    Schema Registry is ready."
+
+# ── 5. Wait for Debezium Connect REST API
 echo "==> Waiting for Debezium Connect..."
 until curl -sf http://localhost:8083/connectors > /dev/null 2>&1; do
   sleep 3
 done
 echo "    Debezium Connect is ready."
 
-# ── 5. Run the end-to-end tests
+# ── 6. Run the end-to-end tests
 echo "==> Running E2E tests..."
 export DATABASE_URL="postgres://order_user:order_pass@localhost:5432/order_db"
 
