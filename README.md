@@ -48,7 +48,7 @@ named after the `aggregate_type` column (e.g. `"Order"`).
 ### 1. Start the infrastructure
 
 ```bash
-docker compose up -d postgres kafka debezium
+docker-compose up -d postgres kafka debezium
 ```
 
 ### 2. Run the service locally
@@ -61,7 +61,7 @@ cargo run
 Or run everything with Docker:
 
 ```bash
-docker compose up --build
+docker-compose up --build
 ```
 
 ### 3. Register the Debezium connector
