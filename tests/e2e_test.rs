@@ -41,12 +41,8 @@ async fn wait_for_http(label: &str, url: &str, timeout: Duration, interval: Dura
         if tokio::time::Instant::now() > deadline {
             panic!("{} did not become ready within {:?}", label, timeout);
         }
-        if client
-            .get(url)
-            .send()
-            .await
-            .map_or(false, |r| r.status().is_success())
-        {
+        // Any HTTP response (even 4xx) means the server is up.
+        if client.get(url).send().await.is_ok() {
             return;
         }
         tokio::time::sleep(interval).await;
@@ -76,7 +72,7 @@ async fn register_debezium_connector(http: &Client) {
             "database.user": "order_user",
             "database.password": "order_pass",
             "database.dbname": "order_db",
-            "database.server.name": "order_db_e2e",
+            "topic.prefix": "order_db_e2e",
             "plugin.name": "pgoutput",
             "slot.name": "e2e_slot",
             "publication.name": "e2e_pub",
@@ -263,6 +259,17 @@ async fn test_create_order_event_reaches_kafka() {
         };
 
         let event: Value = match serde_json::from_str(payload_str) {
+            Ok(Value::String(inner)) => {
+                // Debezium serialises the JSONB payload as a JSON-encoded string;
+                // parse the inner string to get the actual object.
+                match serde_json::from_str(&inner) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("Failed to parse inner Kafka payload JSON: {}", e);
+                        continue;
+                    }
+                }
+            }
             Ok(v) => v,
             Err(e) => {
                 eprintln!("Failed to parse Kafka message as JSON: {}", e);

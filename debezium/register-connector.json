@@ -7,7 +7,7 @@
     "database.user": "order_user",
     "database.password": "order_pass",
     "database.dbname": "order_db",
-    "database.server.name": "order_db",
+    "topic.prefix": "order_db",
     "plugin.name": "pgoutput",
     "table.include.list": "public.outbox",
     "tombstones.on.delete": "false",

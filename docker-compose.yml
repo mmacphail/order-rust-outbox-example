@@ -49,7 +49,7 @@ services:
       retries: 10
 
   debezium:
-    image: debezium/connect:2.7
+    image: debezium/connect:2.6
     ports:
       - "8083:8083"
     environment:
