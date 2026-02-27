@@ -78,7 +78,7 @@ cargo run
 Or run everything with Docker:
 
 ```bash
-docker compose up --build
+docker-compose up --build
 ```
 
 ### 3. Register the Debezium connector
