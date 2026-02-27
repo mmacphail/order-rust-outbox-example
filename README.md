@@ -6,6 +6,7 @@ A Rust backend API demonstrating the **Transactional Outbox Pattern** with:
 - **[Diesel](https://diesel.rs/)** – PostgreSQL ORM with compile-time query safety
 - **[Debezium](https://debezium.io/)** – Change Data Capture (CDC) connector
 - **[Apache Kafka](https://kafka.apache.org/)** – Event streaming platform
+- **[Confluent Schema Registry](https://docs.confluent.io/platform/current/schema-registry/index.html)** – Avro schema registry
 - **[AKHQ](https://akhq.io/)** – Kafka web UI for browsing topics and messages
 - **PostgreSQL** – Primary datastore with logical replication enabled
 
@@ -31,13 +32,29 @@ The service manages an **Order** aggregate consisting of:
 └─────────────────────────────────────┘              ▼
                                               Kafka Topic
                                               "Order"
+                                         (Avro-encoded)
 ```
 
 When an order is created the API writes the order, its lines, and an
 `OrderCreated` outbox event **in a single database transaction**.
 Debezium reads new rows from the `outbox` table via PostgreSQL logical
-replication (CDC) and publishes the `payload` JSON to the Kafka topic
-named after the `aggregate_type` column (e.g. `"Order"`).
+replication (CDC) and publishes the `payload` as an **Avro-encoded** message
+to the Kafka topic named after the `aggregate_type` column (e.g. `"Order"`).
+Schemas are registered and versioned in the **Confluent Schema Registry**.
+
+## Serialization Format
+
+Kafka messages use the **Confluent wire format**:
+
+| Bytes | Content |
+|-------|---------|
+| 0 | Magic byte (`0x00`) |
+| 1–4 | 4-byte schema ID (big-endian int) |
+| 5+ | Avro binary-encoded payload |
+
+The `payload` field from the outbox table (PostgreSQL `JSONB`) is serialized as
+an Avro `string`. Schemas are auto-registered in Confluent Schema Registry under
+the subject `<topic>-value` (e.g. `Order-value`).
 
 ## Prerequisites
 
@@ -49,7 +66,7 @@ named after the `aggregate_type` column (e.g. `"Order"`).
 ### 1. Start the infrastructure
 
 ```bash
-docker-compose up -d postgres kafka debezium
+docker-compose up -d postgres kafka schema-registry debezium
 ```
 
 ### 2. Run the service locally
@@ -75,10 +92,15 @@ curl -X POST http://localhost:8083/connectors \
   -d @debezium/register-connector.json
 ```
 
+The connector uses `io.confluent.connect.avro.AvroConverter` to
+serialize messages and automatically registers schemas in Confluent Schema Registry
+at `http://localhost:8081`.
+
 ### 4. Browse Kafka topics with AKHQ
 
 Once the stack is running, open **http://localhost:8090** in your browser to
-explore Kafka topics and inspect the outbox messages published by Debezium.
+explore Kafka topics, inspect Avro-encoded outbox messages, and browse schemas
+registered in the Schema Registry.
 
 ## API Endpoints
 
