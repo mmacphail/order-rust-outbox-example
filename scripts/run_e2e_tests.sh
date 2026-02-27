@@ -36,7 +36,7 @@ trap teardown EXIT
 
 # ── 1. Start infrastructure services (not the order_service – we run it in the test process)
 echo "==> Starting infrastructure services..."
-docker compose up -d postgres zookeeper kafka debezium
+docker compose up -d postgres kafka debezium
 
 # ── 2. Wait for Postgres
 echo "==> Waiting for Postgres to be healthy..."
@@ -48,7 +48,7 @@ echo "    Postgres is ready."
 # ── 3. Wait for Kafka
 echo "==> Waiting for Kafka to be healthy..."
 until docker compose exec -T kafka \
-    kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
+    kafka-topics.sh --bootstrap-server localhost:9092 --list > /dev/null 2>&1; do
   sleep 3
 done
 echo "    Kafka is ready."
