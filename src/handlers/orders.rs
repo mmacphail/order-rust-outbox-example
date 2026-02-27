@@ -4,6 +4,7 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::str::FromStr;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::db::DbPool;
@@ -15,20 +16,26 @@ use crate::schema::{order_lines, orders, outbox};
 
 // ── Request / response DTOs ──────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrderLineRequest {
     pub product_id: Uuid,
     pub quantity: i32,
-    pub unit_price: String, // decimal as string to avoid floating-point issues
+    /// Decimal price as a string to avoid floating-point issues, e.g. "9.99"
+    pub unit_price: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrderRequest {
     pub customer_id: Uuid,
     pub lines: Vec<CreateOrderLineRequest>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreateOrderResponse {
+    pub id: Uuid,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OrderLineResponse {
     pub id: Uuid,
     pub product_id: Uuid,
@@ -36,7 +43,7 @@ pub struct OrderLineResponse {
     pub unit_price: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OrderResponse {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -53,6 +60,16 @@ pub struct OrderResponse {
 /// order_lines, and an outbox event) are performed inside a single database
 /// transaction so that the outbox entry is guaranteed to be written if and
 /// only if the order is committed.
+#[utoipa::path(
+    post,
+    path = "/orders",
+    request_body = CreateOrderRequest,
+    responses(
+        (status = 201, description = "Order created successfully", body = CreateOrderResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "orders"
+)]
 pub async fn create_order(
     pool: web::Data<DbPool>,
     body: web::Json<CreateOrderRequest>,
@@ -142,6 +159,19 @@ pub async fn create_order(
 /// GET /orders/{id}
 ///
 /// Returns the order together with its order lines.
+#[utoipa::path(
+    get,
+    path = "/orders/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Order UUID"),
+    ),
+    responses(
+        (status = 200, description = "Order found", body = OrderResponse),
+        (status = 404, description = "Order not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "orders"
+)]
 pub async fn get_order(
     pool: web::Data<DbPool>,
     path: web::Path<Uuid>,

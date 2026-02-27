@@ -18,6 +18,8 @@ bigdecimal = { version = "0.4", features = ["serde"] }
 r2d2 = "0.8"
 log = "0.4"
 env_logger = "0.11"
+utoipa = { version = "5", features = ["actix_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["actix-web"] }
 
 [dev-dependencies]
 rdkafka = { version = "0.36", features = ["tokio"] }
