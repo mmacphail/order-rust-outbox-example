@@ -7,6 +7,7 @@ A Rust backend API demonstrating the **Transactional Outbox Pattern** with:
 - **[Debezium](https://debezium.io/)** – Change Data Capture (CDC) connector
 - **[Apache Kafka](https://kafka.apache.org/)** – Event streaming platform
 - **[Confluent Schema Registry](https://docs.confluent.io/platform/current/schema-registry/index.html)** – Avro schema registry
+- **[AKHQ](https://akhq.io/)** – Kafka web UI for browsing topics and messages
 - **PostgreSQL** – Primary datastore with logical replication enabled
 
 ## Domain Model
@@ -94,6 +95,12 @@ curl -X POST http://localhost:8083/connectors \
 The connector uses `io.confluent.connect.avro.AvroConverter` to
 serialize messages and automatically registers schemas in Confluent Schema Registry
 at `http://localhost:8081`.
+
+### 4. Browse Kafka topics with AKHQ
+
+Once the stack is running, open **http://localhost:8090** in your browser to
+explore Kafka topics, inspect Avro-encoded outbox messages, and browse schemas
+registered in the Schema Registry.
 
 ## API Endpoints
 
