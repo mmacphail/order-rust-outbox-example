@@ -155,7 +155,10 @@ mod tests {
         assert_eq!(result, "hello");
     }
 
-    /// Encode a non-negative integer as a zigzag varint (Avro string length prefix).
+    /// Encode a non-negative integer as an Avro string length prefix.
+    ///
+    /// Avro encodes string lengths as zigzag-encoded longs; for non-negative `n`,
+    /// the zigzag encoding is simply `n * 2`.
     fn encode_avro_length(n: usize) -> Vec<u8> {
         let mut zigzag = (n as u64) * 2; // positive zigzag encoding
         let mut out = Vec::new();

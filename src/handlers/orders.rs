@@ -72,6 +72,16 @@ fn default_limit() -> i64 {
     20
 }
 
+impl ListOrdersParams {
+    /// Returns `(page, limit, offset)` after clamping inputs to valid ranges.
+    pub fn into_query_params(self) -> (i64, i64, i64) {
+        let page = self.page.max(1);
+        let limit = self.limit.clamp(1, 100);
+        let offset = (page - 1) * limit;
+        (page, limit, offset)
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ListOrdersResponse {
     pub items: Vec<OrderResponse>,
@@ -272,10 +282,7 @@ pub async fn list_orders(
     pool: web::Data<DbPool>,
     query: web::Query<ListOrdersParams>,
 ) -> Result<HttpResponse, AppError> {
-    let params = query.into_inner();
-    let page = params.page.max(1);
-    let limit = params.limit.clamp(1, 100);
-    let offset = (page - 1) * limit;
+    let (page, limit, offset) = query.into_inner().into_query_params();
 
     let result = web::block(move || {
         let mut conn = pool.get()?;
@@ -345,6 +352,42 @@ mod tests {
             serde_json::from_str(r#"{"page":3,"limit":50}"#).expect("deserialize custom values");
         assert_eq!(params.page, 3);
         assert_eq!(params.limit, 50);
+    }
+
+    // ── ListOrdersParams::into_query_params ───────────────────────────────────
+
+    #[test]
+    fn page_below_one_is_clamped_to_one() {
+        let (page, _, _) = ListOrdersParams { page: 0, limit: 20 }.into_query_params();
+        assert_eq!(page, 1);
+    }
+
+    #[test]
+    fn limit_below_one_is_clamped_to_one() {
+        let (_, limit, _) = ListOrdersParams { page: 1, limit: 0 }.into_query_params();
+        assert_eq!(limit, 1);
+    }
+
+    #[test]
+    fn limit_above_one_hundred_is_clamped_to_one_hundred() {
+        let (_, limit, _) = ListOrdersParams {
+            page: 1,
+            limit: 999,
+        }
+        .into_query_params();
+        assert_eq!(limit, 100);
+    }
+
+    #[test]
+    fn offset_is_zero_for_first_page() {
+        let (_, _, offset) = ListOrdersParams { page: 1, limit: 20 }.into_query_params();
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn offset_advances_by_limit_each_page() {
+        let (_, _, offset) = ListOrdersParams { page: 3, limit: 25 }.into_query_params();
+        assert_eq!(offset, 50);
     }
 
     // ── CreateOrderRequest deserialization ────────────────────────────────────
