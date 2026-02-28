@@ -71,6 +71,11 @@ services:
       CONFIG_STORAGE_TOPIC: debezium_configs
       OFFSET_STORAGE_TOPIC: debezium_offsets
       STATUS_STORAGE_TOPIC: debezium_statuses
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       kafka:
         condition: service_healthy
@@ -101,7 +106,7 @@ services:
       schema-registry:
         condition: service_healthy
       debezium:
-        condition: service_started
+        condition: service_healthy
 
   order_service:
     build: .
