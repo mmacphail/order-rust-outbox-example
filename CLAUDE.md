@@ -1,4 +1,4 @@
-# Copilot Instructions
+# CLAUDE.md – Project Instructions for Claude Agents
 
 ## Project Overview
 
@@ -55,6 +55,8 @@ Use `just` (https://github.com/casey/just) as the task runner:
 | `just infra-up` | start Postgres + Kafka + Debezium in Docker |
 | `just up` | full stack including the order service |
 | `just down` | tear down all containers and volumes |
+
+## Pre-Commit Checklist
 
 **Before committing or submitting changes always run (in this order):**
 ```bash
