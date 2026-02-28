@@ -18,6 +18,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
     paths(
         handlers::orders::create_order,
         handlers::orders::get_order,
+        handlers::orders::list_orders,
     ),
     components(schemas(
         handlers::orders::CreateOrderRequest,
@@ -25,6 +26,8 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
         handlers::orders::CreateOrderResponse,
         handlers::orders::OrderResponse,
         handlers::orders::OrderLineResponse,
+        handlers::orders::ListOrdersParams,
+        handlers::orders::ListOrdersResponse,
     )),
     tags(
         (name = "orders", description = "Order management endpoints")
@@ -66,6 +69,7 @@ pub fn build_server(
             .service(
                 web::scope("/orders")
                     .route("", web::post().to(handlers::orders::create_order))
+                    .route("", web::get().to(handlers::orders::list_orders))
                     .route("/{id}", web::get().to(handlers::orders::get_order)),
             )
     })
