@@ -52,6 +52,34 @@ pub struct OrderResponse {
     pub lines: Vec<OrderLineResponse>,
 }
 
+// ── Pagination ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListOrdersParams {
+    /// Page number (1-based). Defaults to 1.
+    #[serde(default = "default_page")]
+    pub page: i64,
+    /// Number of items per page. Defaults to 20, maximum 100.
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+
+fn default_limit() -> i64 {
+    20
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ListOrdersResponse {
+    pub items: Vec<OrderResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub limit: i64,
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// POST /orders
@@ -221,4 +249,66 @@ pub async fn get_order(
         Some(order) => Ok(HttpResponse::Ok().json(order)),
         None => Err(AppError::NotFound),
     }
+}
+
+/// GET /orders
+///
+/// Returns a paginated list of orders (without their lines).
+/// Use `page` (1-based) and `limit` to control pagination.
+#[utoipa::path(
+    get,
+    path = "/orders",
+    params(
+        ("page" = Option<i64>, Query, description = "Page number (1-based, default 1)"),
+        ("limit" = Option<i64>, Query, description = "Items per page (default 20, max 100)"),
+    ),
+    responses(
+        (status = 200, description = "Paginated list of orders", body = ListOrdersResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "orders"
+)]
+pub async fn list_orders(
+    pool: web::Data<DbPool>,
+    query: web::Query<ListOrdersParams>,
+) -> Result<HttpResponse, AppError> {
+    let params = query.into_inner();
+    let page = params.page.max(1);
+    let limit = params.limit.clamp(1, 100);
+    let offset = (page - 1) * limit;
+
+    let result = web::block(move || {
+        let mut conn = pool.get()?;
+
+        let total: i64 = orders::table.count().get_result(&mut conn)?;
+
+        let rows = orders::table
+            .select(crate::models::order::Order::as_select())
+            .order(orders::created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .load(&mut conn)?;
+
+        let items: Vec<OrderResponse> = rows
+            .into_iter()
+            .map(|o| OrderResponse {
+                id: o.id,
+                customer_id: o.customer_id,
+                status: o.status,
+                created_at: o.created_at.to_rfc3339(),
+                lines: vec![],
+            })
+            .collect();
+
+        Ok::<_, AppError>(ListOrdersResponse {
+            items,
+            total,
+            page,
+            limit,
+        })
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    Ok(HttpResponse::Ok().json(result))
 }
