@@ -155,16 +155,29 @@ mod tests {
         assert_eq!(result, "hello");
     }
 
+    /// Encode a non-negative integer as a zigzag varint (Avro string length prefix).
+    fn encode_avro_length(n: usize) -> Vec<u8> {
+        let mut zigzag = (n as u64) * 2; // positive zigzag encoding
+        let mut out = Vec::new();
+        loop {
+            let byte = (zigzag & 0x7F) as u8;
+            zigzag >>= 7;
+            if zigzag > 0 {
+                out.push(byte | 0x80);
+            } else {
+                out.push(byte);
+                break;
+            }
+        }
+        out
+    }
+
     #[test]
     fn decode_valid_json_payload() {
         let json = r#"{"order_id":"abc","status":"PENDING"}"#;
         let json_bytes = json.as_bytes();
-        // zigzag-encode the byte length
-        let len = json_bytes.len() as u64;
-        let zigzag = len * 2; // positive zigzag encoding
-                              // Build varint bytes (single byte since len < 64)
-        assert!(zigzag < 128, "test assumes single-byte varint");
-        let mut bytes = vec![0x00u8, 0x00, 0x00, 0x00, 0x01, zigzag as u8];
+        let mut bytes = vec![0x00u8, 0x00, 0x00, 0x00, 0x01];
+        bytes.extend_from_slice(&encode_avro_length(json_bytes.len()));
         bytes.extend_from_slice(json_bytes);
         let result = decode_avro_string_payload(&bytes).expect("should decode JSON payload");
         assert_eq!(result, json);

@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn from_diesel_not_found_converts() {
+    fn from_diesel_not_found_wraps_as_database_error() {
         let app_err: AppError = diesel::result::Error::NotFound.into();
         assert!(matches!(app_err, AppError::DatabaseError(_)));
     }

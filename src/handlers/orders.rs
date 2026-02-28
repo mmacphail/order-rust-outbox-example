@@ -347,40 +347,6 @@ mod tests {
         assert_eq!(params.limit, 50);
     }
 
-    // ── Pagination arithmetic ─────────────────────────────────────────────────
-
-    #[test]
-    fn page_clamped_to_minimum_one() {
-        assert_eq!(0i64.max(1), 1);
-        assert_eq!((-5i64).max(1), 1);
-        assert_eq!(1i64.max(1), 1);
-        assert_eq!(5i64.max(1), 5);
-    }
-
-    #[test]
-    fn limit_clamped_to_one_to_one_hundred() {
-        assert_eq!(0i64.clamp(1, 100), 1);
-        assert_eq!(101i64.clamp(1, 100), 100);
-        assert_eq!(1i64.clamp(1, 100), 1);
-        assert_eq!(100i64.clamp(1, 100), 100);
-        assert_eq!(42i64.clamp(1, 100), 42);
-    }
-
-    #[test]
-    fn offset_is_zero_on_first_page() {
-        let page: i64 = 1;
-        let limit: i64 = 20;
-        assert_eq!((page - 1) * limit, 0);
-    }
-
-    #[test]
-    fn offset_advances_by_limit_each_page() {
-        let limit: i64 = 20;
-        assert_eq!((2i64 - 1) * limit, 20);
-        assert_eq!((3i64 - 1) * limit, 40);
-        assert_eq!((5i64 - 1) * limit, 80);
-    }
-
     // ── CreateOrderRequest deserialization ────────────────────────────────────
 
     #[test]
@@ -410,24 +376,6 @@ mod tests {
             serde_json::from_value(json).expect("deserialize CreateOrderRequest with empty lines");
         assert_eq!(req.customer_id, customer);
         assert!(req.lines.is_empty());
-    }
-
-    // ── Unit price parsing ────────────────────────────────────────────────────
-
-    #[test]
-    fn valid_unit_price_parses_successfully() {
-        use std::str::FromStr;
-        assert!(bigdecimal::BigDecimal::from_str("9.99").is_ok());
-        assert!(bigdecimal::BigDecimal::from_str("0.00").is_ok());
-        assert!(bigdecimal::BigDecimal::from_str("1000").is_ok());
-    }
-
-    #[test]
-    fn invalid_unit_price_fails_to_parse() {
-        use std::str::FromStr;
-        assert!(bigdecimal::BigDecimal::from_str("not-a-number").is_err());
-        assert!(bigdecimal::BigDecimal::from_str("").is_err());
-        assert!(bigdecimal::BigDecimal::from_str("9.9.9").is_err());
     }
 
     // ── Response serialization ────────────────────────────────────────────────
