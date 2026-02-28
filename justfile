@@ -56,6 +56,11 @@ test-e2e-no-teardown:
 coverage:
     cargo llvm-cov --html
 
+# Serve the HTML coverage report on http://localhost:8000 (Ctrl-C to stop)
+see-coverage:
+    @echo "Serving coverage report at http://localhost:8000 — press Ctrl-C to stop"
+    python3 -m http.server 8000 --directory target/llvm-cov/html
+
 # ── Infrastructure ─────────────────────────────────────────────────────────────
 
 # Start all infrastructure services (Postgres, Kafka, Schema Registry, Debezium, AKHQ)

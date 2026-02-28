@@ -719,4 +719,40 @@ mod tests {
             "limit must be echoed back"
         );
     }
+
+    #[actix_web::test]
+    async fn list_orders_returns_empty_for_page_beyond_results() {
+        let svc = make_service(InMemoryOrderRepo::default());
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::get().to(list_orders::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/orders?page=2")
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "page 2 with no results should still yield 200"
+        );
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert_eq!(
+            body["items"]
+                .as_array()
+                .expect("items must be an array")
+                .len(),
+            0,
+            "items should be empty for a page beyond available results"
+        );
+        assert_eq!(
+            body["total"].as_u64().expect("total must be a number"),
+            0,
+            "total should be 0 when the repository is empty"
+        );
+    }
 }

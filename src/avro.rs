@@ -130,6 +130,14 @@ mod tests {
     }
 
     #[test]
+    fn decode_returns_none_when_avro_payload_is_empty() {
+        // Valid 5-byte header but nothing after it: read_avro_long returns None,
+        // triggering the ? early-return branch.
+        let bytes = vec![0x00u8, 0x00, 0x00, 0x00, 0x01];
+        assert!(decode_avro_string_payload(&bytes).is_none());
+    }
+
+    #[test]
     fn decode_returns_none_for_negative_byte_count() {
         // Construct a payload where the length varint decodes to -1 (zigzag 0x01)
         // Header: magic 0x00 + 4-byte schema id
@@ -184,5 +192,18 @@ mod tests {
         bytes.extend_from_slice(json_bytes);
         let result = decode_avro_string_payload(&bytes).expect("should decode JSON payload");
         assert_eq!(result, json);
+    }
+
+    #[test]
+    fn decode_valid_long_payload_uses_multi_byte_length() {
+        // 100 bytes triggers the multi-byte zigzag varint branch in encode_avro_length
+        // (100 * 2 = 200 > 127, requiring two continuation bytes)
+        let long_str = "x".repeat(100);
+        let str_bytes = long_str.as_bytes();
+        let mut bytes = vec![0x00u8, 0x00, 0x00, 0x00, 0x01];
+        bytes.extend_from_slice(&encode_avro_length(str_bytes.len()));
+        bytes.extend_from_slice(str_bytes);
+        let result = decode_avro_string_payload(&bytes).expect("should decode long payload");
+        assert_eq!(result, long_str);
     }
 }
