@@ -39,7 +39,9 @@ pub struct ApiDoc;
 
 /// Run any pending Diesel migrations against the pool's database.
 pub fn run_migrations(pool: &DbPool) {
-    let mut conn = pool.get().expect("Failed to get DB connection for migrations");
+    let mut conn = pool
+        .get()
+        .expect("Failed to get DB connection for migrations");
     conn.run_pending_migrations(MIGRATIONS)
         .expect("Failed to run database migrations");
 }
@@ -59,8 +61,7 @@ pub fn build_server(
             .app_data(web::Data::new(pool.clone()))
             .wrap(Logger::default())
             .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}")
-                    .url("/api-docs/openapi.json", openapi.clone()),
+                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
             .service(
                 web::scope("/orders")

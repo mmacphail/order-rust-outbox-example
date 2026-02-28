@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 use crate::schema::order_lines;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Queryable, Selectable, Identifiable, Associations)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Queryable, Selectable, Identifiable, Associations,
+)]
 #[diesel(table_name = order_lines)]
 #[diesel(belongs_to(crate::models::order::Order))]
 #[diesel(check_for_backend(diesel::pg::Pg))]

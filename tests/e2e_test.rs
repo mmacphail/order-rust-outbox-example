@@ -58,7 +58,10 @@ async fn wait_for_http(label: &str, url: &str, timeout: Duration, interval: Dura
 async fn register_debezium_connector(http: &Client) {
     // Remove any stale connector so registration is idempotent.
     let _ = http
-        .delete(format!("{}/connectors/order-outbox-connector", DEBEZIUM_URL))
+        .delete(format!(
+            "{}/connectors/order-outbox-connector",
+            DEBEZIUM_URL
+        ))
         .send()
         .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -125,8 +128,7 @@ async fn wait_for_connector_running(http: &Client) {
 
         if let Ok(r) = resp {
             if let Ok(v) = r.json::<Value>().await {
-                let connector_running =
-                    v["connector"]["state"].as_str() == Some("RUNNING");
+                let connector_running = v["connector"]["state"].as_str() == Some("RUNNING");
                 let task_running = v["tasks"]
                     .as_array()
                     .and_then(|tasks| tasks.first())
@@ -173,16 +175,15 @@ async fn wait_for_connector_running(http: &Client) {
 #[tokio::test]
 #[ignore = "requires docker-compose infrastructure – run via scripts/run_e2e_tests.sh"]
 async fn test_create_order_event_reaches_kafka() {
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://order_user:order_pass@localhost:5432/order_db".to_string()
-    });
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://order_user:order_pass@localhost:5432/order_db".to_string());
 
     // ── 1. Start the order service ───────────────────────────────────────────
     let pool = create_pool(&database_url);
     run_migrations(&pool);
 
-    let server = build_server(pool, "127.0.0.1", APP_PORT)
-        .expect("Failed to bind the order service");
+    let server =
+        build_server(pool, "127.0.0.1", APP_PORT).expect("Failed to bind the order service");
     tokio::spawn(server);
 
     let app_url = format!("http://127.0.0.1:{}", APP_PORT);
@@ -302,10 +303,7 @@ async fn test_create_order_event_reaches_kafka() {
         let json_str = match decode_avro_string_payload(raw_bytes) {
             Some(s) => s,
             None => {
-                eprintln!(
-                    "Failed to decode Avro payload ({} bytes)",
-                    raw_bytes.len()
-                );
+                eprintln!("Failed to decode Avro payload ({} bytes)", raw_bytes.len());
                 continue;
             }
         };
