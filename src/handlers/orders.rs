@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(
             body["total"].as_u64().expect("total must be a number"),
             0,
-            "total should be 0 when no items on this page"
+            "total should be 0 when the repository is empty"
         );
     }
 }
