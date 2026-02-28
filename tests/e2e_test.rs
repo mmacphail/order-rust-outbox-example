@@ -15,7 +15,7 @@
 
 use apache_avro::types::Value as AvroValue;
 use futures::StreamExt;
-use order_service::{avro::decode_avro_string_payload, build_server, create_pool, run_migrations};
+use order_service::{build_server, create_pool, run_migrations};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
