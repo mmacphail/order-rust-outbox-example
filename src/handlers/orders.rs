@@ -412,22 +412,12 @@ mod tests {
     use crate::domain::errors::DomainError;
     use crate::domain::order::{ListResult, OrderLineView, OrderView};
 
+    #[derive(Default)]
     struct InMemoryOrderRepo {
         find_result: Option<OrderView>,
         create_error: Option<String>,
         find_error: Option<String>,
         list_error: Option<String>,
-    }
-
-    impl Default for InMemoryOrderRepo {
-        fn default() -> Self {
-            Self {
-                find_result: None,
-                create_error: None,
-                find_error: None,
-                list_error: None,
-            }
-        }
     }
 
     impl OrderRepository for InMemoryOrderRepo {
