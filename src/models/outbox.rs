@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::schema::outbox;
+use crate::schema::commerce_order_outbox;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Queryable, Selectable, Identifiable)]
-#[diesel(table_name = outbox)]
+#[diesel(table_name = commerce_order_outbox)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct OutboxEvent {
     pub id: Uuid,
@@ -19,7 +19,7 @@ pub struct OutboxEvent {
 }
 
 #[derive(Debug, Insertable)]
-#[diesel(table_name = outbox)]
+#[diesel(table_name = commerce_order_outbox)]
 pub struct NewOutboxEvent {
     pub id: Uuid,
     pub aggregate_type: String,

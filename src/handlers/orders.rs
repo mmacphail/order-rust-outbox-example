@@ -12,7 +12,7 @@ use crate::errors::AppError;
 use crate::models::order::NewOrder;
 use crate::models::order_line::NewOrderLine;
 use crate::models::outbox::NewOutboxEvent;
-use crate::schema::{order_lines, orders, outbox};
+use crate::schema::{commerce_order_outbox, order_lines, orders};
 
 // ── Request / response DTOs ──────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ pub async fn create_order(
             // 3. Build the outbox payload and insert the event.
             //    Debezium's outbox event router will read this row via CDC and
             //    publish the payload to the Kafka topic derived from
-            //    `aggregate_type` (e.g. "Order" → topic "Order").
+            //    `aggregate_type` determines the Kafka topic via the EventRouter SMT.
             let line_payloads: Vec<serde_json::Value> = body
                 .lines
                 .iter()
@@ -171,7 +171,7 @@ pub async fn create_order(
                 event_type: "OrderCreated".to_string(),
                 payload: event_payload,
             };
-            diesel::insert_into(outbox::table)
+            diesel::insert_into(commerce_order_outbox::table)
                 .values(&new_event)
                 .execute(conn)?;
 
