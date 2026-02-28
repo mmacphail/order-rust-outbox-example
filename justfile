@@ -56,7 +56,7 @@ coverage:
 
 # Start all infrastructure services (Postgres, Zookeeper, Kafka, Debezium)
 infra-up:
-    docker compose up -d postgres zookeeper kafka debezium
+    docker compose up -d postgres kafka debezium schema-registry akhq
 
 # Start the full stack including the order service
 up:
