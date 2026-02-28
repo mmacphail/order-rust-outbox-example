@@ -14,7 +14,7 @@
 //!     cargo test --test e2e_test -- --include-ignored
 
 use futures::StreamExt;
-use order_service::{build_server, create_pool, run_migrations};
+use order_service::{avro::decode_avro_string_payload, build_server, create_pool, run_migrations};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
@@ -365,56 +365,4 @@ async fn test_create_order_event_reaches_kafka() {
         "OrderCreated event for order '{}' was not received on Kafka topic '{}' within {} seconds",
         order_id, KAFKA_TOPIC, KAFKA_WAIT_SECS
     );
-}
-
-// ── Avro wire format helpers ──────────────────────────────────────────────────
-
-/// Decode an Avro-encoded payload from the Confluent/Apicurio wire format.
-///
-/// Wire format: magic byte (0x00) + 4-byte schema ID + Avro binary string.
-/// The Debezium outbox EventRouter publishes the JSONB `payload` column as an
-/// Avro string, so decoding yields the raw JSON text of the order event.
-fn decode_avro_string_payload(bytes: &[u8]) -> Option<String> {
-    // Expect: magic byte 0x00 + 4-byte artifact/schema ID = 5-byte header.
-    if bytes.len() < 5 || bytes[0] != 0x00 {
-        return None;
-    }
-    let avro_bytes = &bytes[5..];
-
-    // Avro binary string encoding: zigzag long (byte count) + UTF-8 bytes.
-    let (byte_count, header_len) = read_avro_long(avro_bytes)?;
-    // A negative byte count means corrupted data (valid Avro strings have non-negative length).
-    if byte_count < 0 {
-        return None;
-    }
-    let byte_count = byte_count as usize;
-    let end = header_len + byte_count;
-    if end > avro_bytes.len() {
-        return None;
-    }
-    String::from_utf8(avro_bytes[header_len..end].to_vec()).ok()
-}
-
-/// Read a zigzag-encoded Avro long from the start of `bytes`.
-///
-/// Returns `(decoded_value, bytes_consumed)`.
-fn read_avro_long(bytes: &[u8]) -> Option<(i64, usize)> {
-    let mut n: u64 = 0;
-    let mut shift = 0u32;
-    let mut consumed = 0;
-    loop {
-        if consumed >= bytes.len() {
-            return None;
-        }
-        let b = bytes[consumed] as u64;
-        consumed += 1;
-        n |= (b & 0x7F) << shift;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-    }
-    // Zigzag decode: (n >> 1) XOR -(n & 1)
-    let decoded = ((n >> 1) as i64) ^ -((n & 1) as i64);
-    Some((decoded, consumed))
 }

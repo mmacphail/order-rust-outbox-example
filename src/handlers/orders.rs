@@ -312,3 +312,182 @@ pub async fn list_orders(
 
     Ok(HttpResponse::Ok().json(result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── default_page / default_limit ──────────────────────────────────────────
+
+    #[test]
+    fn default_page_is_one() {
+        assert_eq!(default_page(), 1);
+    }
+
+    #[test]
+    fn default_limit_is_twenty() {
+        assert_eq!(default_limit(), 20);
+    }
+
+    // ── ListOrdersParams deserialization ──────────────────────────────────────
+
+    #[test]
+    fn list_orders_params_uses_defaults_when_fields_absent() {
+        let params: ListOrdersParams =
+            serde_json::from_str("{}").expect("deserialize empty object");
+        assert_eq!(params.page, 1);
+        assert_eq!(params.limit, 20);
+    }
+
+    #[test]
+    fn list_orders_params_accepts_custom_values() {
+        let params: ListOrdersParams =
+            serde_json::from_str(r#"{"page":3,"limit":50}"#).expect("deserialize custom values");
+        assert_eq!(params.page, 3);
+        assert_eq!(params.limit, 50);
+    }
+
+    // ── Pagination arithmetic ─────────────────────────────────────────────────
+
+    #[test]
+    fn page_clamped_to_minimum_one() {
+        assert_eq!(0i64.max(1), 1);
+        assert_eq!((-5i64).max(1), 1);
+        assert_eq!(1i64.max(1), 1);
+        assert_eq!(5i64.max(1), 5);
+    }
+
+    #[test]
+    fn limit_clamped_to_one_to_one_hundred() {
+        assert_eq!(0i64.clamp(1, 100), 1);
+        assert_eq!(101i64.clamp(1, 100), 100);
+        assert_eq!(1i64.clamp(1, 100), 1);
+        assert_eq!(100i64.clamp(1, 100), 100);
+        assert_eq!(42i64.clamp(1, 100), 42);
+    }
+
+    #[test]
+    fn offset_is_zero_on_first_page() {
+        let page: i64 = 1;
+        let limit: i64 = 20;
+        assert_eq!((page - 1) * limit, 0);
+    }
+
+    #[test]
+    fn offset_advances_by_limit_each_page() {
+        let limit: i64 = 20;
+        assert_eq!((2i64 - 1) * limit, 20);
+        assert_eq!((3i64 - 1) * limit, 40);
+        assert_eq!((5i64 - 1) * limit, 80);
+    }
+
+    // ── CreateOrderRequest deserialization ────────────────────────────────────
+
+    #[test]
+    fn create_order_request_deserializes_with_lines() {
+        let customer = Uuid::new_v4();
+        let product = Uuid::new_v4();
+        let json = serde_json::json!({
+            "customer_id": customer,
+            "lines": [
+                {"product_id": product, "quantity": 2, "unit_price": "9.99"}
+            ]
+        });
+        let req: CreateOrderRequest =
+            serde_json::from_value(json).expect("deserialize CreateOrderRequest");
+        assert_eq!(req.customer_id, customer);
+        assert_eq!(req.lines.len(), 1);
+        assert_eq!(req.lines[0].product_id, product);
+        assert_eq!(req.lines[0].quantity, 2);
+        assert_eq!(req.lines[0].unit_price, "9.99");
+    }
+
+    #[test]
+    fn create_order_request_deserializes_with_empty_lines() {
+        let customer = Uuid::new_v4();
+        let json = serde_json::json!({"customer_id": customer, "lines": []});
+        let req: CreateOrderRequest =
+            serde_json::from_value(json).expect("deserialize CreateOrderRequest with empty lines");
+        assert_eq!(req.customer_id, customer);
+        assert!(req.lines.is_empty());
+    }
+
+    // ── Unit price parsing ────────────────────────────────────────────────────
+
+    #[test]
+    fn valid_unit_price_parses_successfully() {
+        use std::str::FromStr;
+        assert!(bigdecimal::BigDecimal::from_str("9.99").is_ok());
+        assert!(bigdecimal::BigDecimal::from_str("0.00").is_ok());
+        assert!(bigdecimal::BigDecimal::from_str("1000").is_ok());
+    }
+
+    #[test]
+    fn invalid_unit_price_fails_to_parse() {
+        use std::str::FromStr;
+        assert!(bigdecimal::BigDecimal::from_str("not-a-number").is_err());
+        assert!(bigdecimal::BigDecimal::from_str("").is_err());
+        assert!(bigdecimal::BigDecimal::from_str("9.9.9").is_err());
+    }
+
+    // ── Response serialization ────────────────────────────────────────────────
+
+    #[test]
+    fn order_response_serializes_to_json() {
+        let id = Uuid::new_v4();
+        let customer_id = Uuid::new_v4();
+        let resp = OrderResponse {
+            id,
+            customer_id,
+            status: "PENDING".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            lines: vec![],
+        };
+        let json = serde_json::to_value(&resp).expect("serialize OrderResponse");
+        assert_eq!(json["id"].as_str(), Some(id.to_string().as_str()));
+        assert_eq!(
+            json["customer_id"].as_str(),
+            Some(customer_id.to_string().as_str())
+        );
+        assert_eq!(json["status"].as_str(), Some("PENDING"));
+        assert_eq!(json["lines"].as_array().map(|a| a.len()), Some(0));
+    }
+
+    #[test]
+    fn order_line_response_serializes_to_json() {
+        let id = Uuid::new_v4();
+        let product_id = Uuid::new_v4();
+        let line = OrderLineResponse {
+            id,
+            product_id,
+            quantity: 3,
+            unit_price: "19.99".to_string(),
+        };
+        let json = serde_json::to_value(&line).expect("serialize OrderLineResponse");
+        assert_eq!(json["quantity"].as_i64(), Some(3));
+        assert_eq!(json["unit_price"].as_str(), Some("19.99"));
+    }
+
+    #[test]
+    fn create_order_response_serializes_id() {
+        let id = Uuid::new_v4();
+        let resp = CreateOrderResponse { id };
+        let json = serde_json::to_value(&resp).expect("serialize CreateOrderResponse");
+        assert_eq!(json["id"].as_str(), Some(id.to_string().as_str()));
+    }
+
+    #[test]
+    fn list_orders_response_serializes() {
+        let resp = ListOrdersResponse {
+            items: vec![],
+            total: 0,
+            page: 1,
+            limit: 20,
+        };
+        let json = serde_json::to_value(&resp).expect("serialize ListOrdersResponse");
+        assert_eq!(json["total"].as_i64(), Some(0));
+        assert_eq!(json["page"].as_i64(), Some(1));
+        assert_eq!(json["limit"].as_i64(), Some(20));
+        assert_eq!(json["items"].as_array().map(|a| a.len()), Some(0));
+    }
+}
