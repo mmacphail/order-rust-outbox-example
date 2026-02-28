@@ -23,7 +23,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    outbox (id) {
+    commerce_order_outbox (id) {
         id -> Uuid,
         #[max_length = 255]
         aggregate_type -> Varchar,
@@ -38,4 +38,4 @@ diesel::table! {
 
 diesel::joinable!(order_lines -> orders (order_id));
 
-diesel::allow_tables_to_appear_in_same_query!(order_lines, orders, outbox,);
+diesel::allow_tables_to_appear_in_same_query!(order_lines, orders, commerce_order_outbox,);

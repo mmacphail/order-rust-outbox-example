@@ -54,9 +54,9 @@ coverage:
 
 # ── Infrastructure ─────────────────────────────────────────────────────────────
 
-# Start all infrastructure services (Postgres, Zookeeper, Kafka, Debezium)
+# Start all infrastructure services (Postgres, Kafka, Schema Registry, Debezium, AKHQ)
 infra-up:
-    docker compose up -d postgres zookeeper kafka debezium
+    docker compose up -d postgres kafka debezium schema-registry akhq
 
 # Start the full stack including the order service
 up:
@@ -78,9 +78,26 @@ register-connector:
         -H "Content-Type: application/json" \
         -d @debezium/register-connector.json
 
+# Re-register the Debezium connector (delete existing, then create)
+reload-connector:
+    -curl -s -X DELETE http://localhost:8083/connectors/order-outbox-connector
+    sleep 2
+    curl -X POST http://localhost:8083/connectors \
+        -H "Content-Type: application/json" \
+        -d @debezium/register-connector.json
+
 # Check the status of the Debezium connector
 connector-status:
-    curl -s http://localhost:8083/connectors | jq .
+    curl -s http://localhost:8083/connectors/order-outbox-connector/status | jq .
+
+# ── Orders ─────────────────────────────────────────────────────────────────────
+
+# Send a test order to the running service
+create-test-order:
+    curl -s -X POST http://localhost:8080/orders \
+        -H "Content-Type: application/json" \
+        -d '{"customer_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "lines": [{"product_id": "b1234567-89ab-cdef-0123-456789abcdef", "quantity": 2, "unit_price": "19.99"}]}' \
+        | jq .
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
