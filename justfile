@@ -83,3 +83,8 @@ connector-status:
 # Copy .env.example to .env (skips if .env already exists)
 env:
     @if [ -f .env ]; then echo ".env already exists, skipping"; else cp .env.example .env && echo ".env created"; fi
+
+# Install git hooks (run once after cloning)
+install-hooks:
+    git config core.hooksPath .githooks
+    @echo "Git hooks installed. Pre-commit hook will run fmt-check, lint, and unit tests."
