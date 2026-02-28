@@ -1,4 +1,4 @@
-//! End-to-end test: POST /orders → Debezium CDC → Avro → Kafka topic "Order".
+//! End-to-end test: POST /orders → Debezium CDC → Avro → Kafka topic "public.commerce.order.c2.v1".
 //!
 //! Requires the full infrastructure stack to be running before executing:
 //!
@@ -13,6 +13,7 @@
 //!   DATABASE_URL=postgres://order_user:order_pass@localhost:5432/order_db \
 //!     cargo test --test e2e_test -- --include-ignored
 
+use apache_avro::types::Value as AvroValue;
 use futures::StreamExt;
 use order_service::{build_server, create_pool, run_migrations};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -26,7 +27,7 @@ use uuid::Uuid;
 const DEBEZIUM_URL: &str = "http://localhost:8083";
 const SCHEMA_REGISTRY_URL: &str = "http://localhost:8081";
 const KAFKA_BROKERS: &str = "localhost:9092";
-const KAFKA_TOPIC: &str = "Order";
+const KAFKA_TOPIC: &str = "public.commerce.order.c2.v1";
 const APP_PORT: u16 = 18080;
 const KAFKA_WAIT_SECS: u64 = 60;
 
@@ -52,9 +53,9 @@ async fn wait_for_http(label: &str, url: &str, timeout: Duration, interval: Dura
 
 /// Register (or replace) the Debezium outbox connector.
 ///
-/// The connector is configured to read `public.outbox` from the Postgres
-/// container (reachable inside Docker as "postgres") and publish events to
-/// a Kafka topic named after `aggregate_type` (e.g. "Order").
+/// The connector is configured to read `public.commerce_order_outbox` from the
+/// Postgres container (reachable inside Docker as "postgres") and publish
+/// events to the fixed topic `public.commerce.order.c2.v1`.
 async fn register_debezium_connector(http: &Client) {
     // Remove any stale connector so registration is idempotent.
     let _ = http
@@ -80,7 +81,7 @@ async fn register_debezium_connector(http: &Client) {
             "plugin.name": "pgoutput",
             "slot.name": "e2e_slot",
             "publication.name": "e2e_pub",
-            "table.include.list": "public.outbox",
+            "table.include.list": "public.commerce_order_outbox",
             "tombstones.on.delete": "false",
             "transforms": "outbox",
             "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
@@ -89,7 +90,8 @@ async fn register_debezium_connector(http: &Client) {
             "transforms.outbox.table.field.event.type": "event_type",
             "transforms.outbox.table.field.event.payload": "payload",
             "transforms.outbox.route.by.field": "aggregate_type",
-            "transforms.outbox.route.topic.replacement": "${routedByValue}",
+            "transforms.outbox.route.topic.replacement": "public.commerce.order.c2.v1",
+            "transforms.outbox.table.fields.additional.placement": "id:envelope:event_id,event_type:envelope,created_at:envelope:event_date",
             "key.converter": "org.apache.kafka.connect.storage.StringConverter",
             "value.converter": "io.confluent.connect.avro.AvroConverter",
             "value.converter.schema.registry.url": "http://schema-registry:8081"
@@ -165,13 +167,13 @@ async fn wait_for_connector_running(http: &Client) {
 
 /// Full end-to-end flow:
 ///  1. Start the order service (actix-web) in a background task.
-///  2. Register the Debezium outbox connector (Avro + Apicurio Schema Registry).
+///  2. Register the Debezium outbox connector (Avro + Confluent Schema Registry).
 ///  3. POST a new order via the REST API.
-///  4. Consume the Kafka "Order" topic until the `OrderCreated` event matching
-///     the new order's ID is received (up to 60 seconds).
+///  4. Consume the Kafka "public.commerce.order.c2.v1" topic until the
+///     `OrderCreated` event matching the new order's ID is received (up to 60 s).
 ///
-/// Messages are serialized as Avro using the Confluent wire format
-/// (magic byte 0x00 + 4-byte schema ID + Avro-encoded payload).
+/// Messages are Avro records with envelope fields (`event_id`, `event_type`,
+/// `event_date`) plus a `payload` string containing the order JSON.
 #[tokio::test]
 #[ignore = "requires docker-compose infrastructure – run via scripts/run_e2e_tests.sh"]
 async fn test_create_order_event_reaches_kafka() {
@@ -296,14 +298,23 @@ async fn test_create_order_event_reaches_kafka() {
             None => continue,
         };
 
-        // Messages are Avro-encoded using the Confluent/Apicurio wire format:
+        // Messages are Avro records using the Confluent wire format:
         // byte 0    – magic byte (0x00)
-        // bytes 1–4 – 4-byte big-endian schema/artifact ID
-        // bytes 5+  – Avro binary-encoded string (the JSONB payload)
-        let json_str = match decode_avro_string_payload(raw_bytes) {
-            Some(s) => s,
+        // bytes 1–4 – 4-byte big-endian schema ID
+        // bytes 5+  – Avro binary-encoded record
+        let record = match decode_avro_record(raw_bytes, &http).await {
+            Some(r) => r,
             None => {
-                eprintln!("Failed to decode Avro payload ({} bytes)", raw_bytes.len());
+                eprintln!("Failed to decode Avro record ({} bytes)", raw_bytes.len());
+                continue;
+            }
+        };
+
+        // Extract the `payload` field (JSON string of the order event).
+        let json_str = match record.get("payload") {
+            Some(AvroValue::String(s)) => s.clone(),
+            _ => {
+                eprintln!("Avro record missing 'payload' string field");
                 continue;
             }
         };
@@ -324,7 +335,7 @@ async fn test_create_order_event_reaches_kafka() {
             continue;
         }
 
-        // ── Assertions ───────────────────────────────────────────────────────
+        // ── Payload assertions ────────────────────────────────────────────────
         assert_eq!(
             event["status"].as_str(),
             Some("PENDING"),
@@ -356,6 +367,31 @@ async fn test_create_order_event_reaches_kafka() {
             "Order line unit_price mismatch"
         );
 
+        // ── Envelope field assertions ─────────────────────────────────────────
+        assert_eq!(
+            record.get("event_type"),
+            Some(&AvroValue::String("OrderCreated".to_string())),
+            "Avro envelope event_type mismatch"
+        );
+
+        let event_id = match record.get("event_id") {
+            Some(AvroValue::String(s)) => s.clone(),
+            _ => panic!("Avro envelope missing 'event_id' string field"),
+        };
+        assert!(
+            !event_id.is_empty(),
+            "Avro envelope event_id should be non-empty"
+        );
+
+        let event_date = match record.get("event_date") {
+            Some(AvroValue::String(s)) => s.clone(),
+            _ => panic!("Avro envelope missing 'event_date' string field"),
+        };
+        assert!(
+            !event_date.is_empty(),
+            "Avro envelope event_date should be non-empty"
+        );
+
         found = true;
         break;
     }
@@ -369,52 +405,38 @@ async fn test_create_order_event_reaches_kafka() {
 
 // ── Avro wire format helpers ──────────────────────────────────────────────────
 
-/// Decode an Avro-encoded payload from the Confluent/Apicurio wire format.
+/// Decode an Avro-encoded record from the Confluent wire format.
 ///
-/// Wire format: magic byte (0x00) + 4-byte schema ID + Avro binary string.
-/// The Debezium outbox EventRouter publishes the JSONB `payload` column as an
-/// Avro string, so decoding yields the raw JSON text of the order event.
-fn decode_avro_string_payload(bytes: &[u8]) -> Option<String> {
-    // Expect: magic byte 0x00 + 4-byte artifact/schema ID = 5-byte header.
+/// Wire format: magic byte (0x00) + 4-byte big-endian schema ID + Avro binary record.
+///
+/// The schema is fetched from the Schema Registry at `SCHEMA_REGISTRY_URL` using
+/// the ID embedded in the message header, then used to decode the record via
+/// `apache_avro`. Returns a field map on success, or `None` on any error.
+async fn decode_avro_record(
+    bytes: &[u8],
+    http: &Client,
+) -> Option<std::collections::HashMap<String, AvroValue>> {
+    // Validate the 5-byte Confluent wire-format header.
     if bytes.len() < 5 || bytes[0] != 0x00 {
         return None;
     }
+
+    let schema_id = u32::from_be_bytes(bytes[1..5].try_into().ok()?);
     let avro_bytes = &bytes[5..];
 
-    // Avro binary string encoding: zigzag long (byte count) + UTF-8 bytes.
-    let (byte_count, header_len) = read_avro_long(avro_bytes)?;
-    // A negative byte count means corrupted data (valid Avro strings have non-negative length).
-    if byte_count < 0 {
-        return None;
-    }
-    let byte_count = byte_count as usize;
-    let end = header_len + byte_count;
-    if end > avro_bytes.len() {
-        return None;
-    }
-    String::from_utf8(avro_bytes[header_len..end].to_vec()).ok()
-}
+    // Fetch the Avro schema JSON from the Schema Registry.
+    let schema_url = format!("{}/schemas/ids/{}", SCHEMA_REGISTRY_URL, schema_id);
+    let schema_resp: Value = http.get(&schema_url).send().await.ok()?.json().await.ok()?;
+    let schema_str = schema_resp["schema"].as_str()?;
 
-/// Read a zigzag-encoded Avro long from the start of `bytes`.
-///
-/// Returns `(decoded_value, bytes_consumed)`.
-fn read_avro_long(bytes: &[u8]) -> Option<(i64, usize)> {
-    let mut n: u64 = 0;
-    let mut shift = 0u32;
-    let mut consumed = 0;
-    loop {
-        if consumed >= bytes.len() {
-            return None;
-        }
-        let b = bytes[consumed] as u64;
-        consumed += 1;
-        n |= (b & 0x7F) << shift;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
+    let schema = apache_avro::Schema::parse_str(schema_str).ok()?;
+
+    let value =
+        apache_avro::from_avro_datum(&schema, &mut avro_bytes.to_vec().as_slice(), None).ok()?;
+
+    if let AvroValue::Record(fields) = value {
+        Some(fields.into_iter().collect())
+    } else {
+        None
     }
-    // Zigzag decode: (n >> 1) XOR -(n & 1)
-    let decoded = ((n >> 1) as i64) ^ -((n & 1) as i64);
-    Some((decoded, consumed))
 }
