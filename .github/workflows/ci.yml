@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   build:
@@ -49,13 +50,43 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Unit tests with coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        run: cargo llvm-cov --no-report
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - name: Generate LCOV report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Generate HTML report
+        run: cargo llvm-cov report --html --output-dir coverage-html
+
+      - name: Generate coverage summary
+        id: coverage
+        run: |
+          SUMMARY=$(cargo llvm-cov report --summary-only 2>&1 | tail -4)
+          echo "summary<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$SUMMARY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: lcov.info
-          fail_ci_if_error: false
+          name: coverage-report
+          path: |
+            lcov.info
+            coverage-html/
+
+      - name: Post coverage comment on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          message: |
+            ## Code Coverage
+
+            ```
+            ${{ steps.coverage.outputs.summary }}
+            ```
+
+            Full HTML report: [workflow artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
   e2e-tests:
     name: End-to-End Tests
