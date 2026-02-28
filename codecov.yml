@@ -1,0 +1,22 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 2%
+        informational: true   # visibility first, enforcement later
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+        informational: true
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true   # only comment if coverage changed
+
+ignore:
+  - "src/main.rs"     # entry-point wiring only
+  - "src/schema.rs"   # Diesel-generated macro output
+  - "migrations/**"   # SQL, not Rust

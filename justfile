@@ -48,6 +48,10 @@ test-e2e:
 test-e2e-no-teardown:
     ./scripts/run_e2e_tests.sh --no-teardown
 
+# Generate HTML code coverage report (opens in target/llvm-cov/html/index.html)
+coverage:
+    cargo llvm-cov --html
+
 # ── Infrastructure ─────────────────────────────────────────────────────────────
 
 # Start all infrastructure services (Postgres, Zookeeper, Kafka, Debezium)
