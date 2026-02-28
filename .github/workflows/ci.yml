@@ -84,13 +84,13 @@ jobs:
           docker pull debezium/postgres:16
           docker pull apache/kafka:4.0.0
           docker pull confluentinc/cp-schema-registry:7.6.0
-          docker pull debezium/connect:2.6
+          docker build -t order-outbox-debezium:cached ./debezium
           mkdir -p /tmp/docker-images
           docker save \
             debezium/postgres:16 \
             apache/kafka:4.0.0 \
             confluentinc/cp-schema-registry:7.6.0 \
-            debezium/connect:2.6 \
+            order-outbox-debezium:cached \
             -o /tmp/docker-images/images.tar
 
       - name: Run end-to-end tests
