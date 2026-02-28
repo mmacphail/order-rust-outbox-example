@@ -26,3 +26,5 @@ rdkafka = { version = "0.36", features = ["tokio"] }
 reqwest = { version = "0.12", features = ["json"] }
 futures = "0.3"
 apache-avro = "0.16"
+testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
