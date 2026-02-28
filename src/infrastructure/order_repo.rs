@@ -139,27 +139,29 @@ impl OrderRepository for DieselOrderRepository {
         let mut conn = self.pool.get()?;
 
         let offset = (page - 1) * limit;
-        let total: i64 = orders::table.count().get_result(&mut conn)?;
+        conn.transaction::<_, DomainError, _>(|conn| {
+            let total: i64 = orders::table.count().get_result(conn)?;
 
-        let rows = orders::table
-            .select(OrderRow::as_select())
-            .order(orders::created_at.desc())
-            .limit(limit)
-            .offset(offset)
-            .load(&mut conn)?;
+            let rows = orders::table
+                .select(OrderRow::as_select())
+                .order(orders::created_at.desc())
+                .limit(limit)
+                .offset(offset)
+                .load(conn)?;
 
-        Ok(ListResult {
-            items: rows
-                .into_iter()
-                .map(|o| OrderView {
-                    id: o.id,
-                    customer_id: o.customer_id,
-                    status: o.status,
-                    created_at: o.created_at,
-                    lines: vec![],
-                })
-                .collect(),
-            total,
+            Ok(ListResult {
+                items: rows
+                    .into_iter()
+                    .map(|o| OrderView {
+                        id: o.id,
+                        customer_id: o.customer_id,
+                        status: o.status,
+                        created_at: o.created_at,
+                        lines: vec![],
+                    })
+                    .collect(),
+                total,
+            })
         })
     }
 }

@@ -118,7 +118,7 @@ pub async fn create_order<R: OrderRepository>(
         .iter()
         .map(|l| {
             let unit_price = BigDecimal::from_str(&l.unit_price).map_err(|e| {
-                AppError::Internal(format!("Invalid unit_price '{}': {}", l.unit_price, e))
+                AppError::BadRequest(format!("Invalid unit_price '{}': {}", l.unit_price, e))
             })?;
             Ok(OrderLineInput {
                 product_id: l.product_id,
@@ -415,6 +415,8 @@ mod tests {
     struct InMemoryOrderRepo {
         find_result: Option<OrderView>,
         create_error: Option<String>,
+        find_error: Option<String>,
+        list_error: Option<String>,
     }
 
     impl Default for InMemoryOrderRepo {
@@ -422,6 +424,8 @@ mod tests {
             Self {
                 find_result: None,
                 create_error: None,
+                find_error: None,
+                list_error: None,
             }
         }
     }
@@ -439,11 +443,17 @@ mod tests {
         }
 
         fn find_by_id(&self, _id: Uuid) -> Result<Option<OrderView>, DomainError> {
+            if let Some(msg) = &self.find_error {
+                return Err(DomainError::Internal(msg.clone()));
+            }
             Ok(self.find_result.clone())
         }
 
         fn list(&self, page: i64, limit: i64) -> Result<ListResult, DomainError> {
-            Ok(ListResult {
+            if let Some(msg) = &self.list_error {
+                return Err(DomainError::Internal(msg.clone()));
+            }
+            let mut r = ListResult {
                 items: vec![OrderView {
                     id: Uuid::new_v4(),
                     customer_id: Uuid::new_v4(),
@@ -452,16 +462,14 @@ mod tests {
                     lines: vec![],
                 }],
                 total: 1,
-            })
-            .map(|mut r| {
-                // Respect page/limit for the test (trim to empty if out of range)
-                if page > 1 {
-                    r.items.clear();
-                    r.total = 0;
-                }
-                let _ = limit; // limit is validated by the handler before reaching the repo
-                r
-            })
+            };
+            // Respect page/limit for the test (trim to empty if out of range)
+            if page > 1 {
+                r.items.clear();
+                r.total = 0;
+            }
+            let _ = limit; // limit is validated by the handler before reaching the repo
+            Ok(r)
         }
     }
 
@@ -501,7 +509,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn create_order_with_invalid_unit_price_returns_500() {
+    async fn create_order_with_invalid_unit_price_returns_400() {
         let svc = make_service(InMemoryOrderRepo::default());
         let app = actix_test::init_service(
             App::new()
@@ -521,8 +529,8 @@ mod tests {
         let resp = actix_test::call_service(&app, req).await;
         assert_eq!(
             resp.status(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "invalid unit_price should yield 500"
+            StatusCode::BAD_REQUEST,
+            "invalid unit_price should yield 400"
         );
     }
 
@@ -553,6 +561,55 @@ mod tests {
             resp.status(),
             StatusCode::INTERNAL_SERVER_ERROR,
             "repo Internal error should propagate as 500"
+        );
+    }
+
+    #[actix_web::test]
+    async fn get_order_returns_500_on_repo_internal_error() {
+        let repo = InMemoryOrderRepo {
+            find_error: Some("db unavailable".to_string()),
+            ..Default::default()
+        };
+        let svc = make_service(repo);
+        let app = actix_test::init_service(App::new().app_data(svc).route(
+            "/orders/{id}",
+            web::get().to(get_order::<InMemoryOrderRepo>),
+        ))
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri(&format!("/orders/{}", Uuid::new_v4()))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "repo Internal error from find_by_id should propagate as 500"
+        );
+    }
+
+    #[actix_web::test]
+    async fn list_orders_returns_500_on_repo_internal_error() {
+        let repo = InMemoryOrderRepo {
+            list_error: Some("db unavailable".to_string()),
+            ..Default::default()
+        };
+        let svc = make_service(repo);
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::get().to(list_orders::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::get().uri("/orders").to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "repo Internal error from list should propagate as 500"
         );
     }
 

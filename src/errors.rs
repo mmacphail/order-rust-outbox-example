@@ -8,6 +8,9 @@ pub enum AppError {
     #[error("Not found")]
     NotFound,
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -16,7 +19,8 @@ impl From<DomainError> for AppError {
     fn from(e: DomainError) -> Self {
         match e {
             DomainError::NotFound => AppError::NotFound,
-            DomainError::InvalidInput(msg) | DomainError::Internal(msg) => AppError::Internal(msg),
+            DomainError::InvalidInput(msg) => AppError::BadRequest(msg),
+            DomainError::Internal(msg) => AppError::Internal(msg),
         }
     }
 }
@@ -25,6 +29,9 @@ impl actix_web::ResponseError for AppError {
     fn error_response(&self) -> HttpResponse {
         match self {
             AppError::NotFound => HttpResponse::NotFound().json(serde_json::json!({
+                "error": self.to_string()
+            })),
+            AppError::BadRequest(_) => HttpResponse::BadRequest().json(serde_json::json!({
                 "error": self.to_string()
             })),
             AppError::Internal(_) => HttpResponse::InternalServerError().json(serde_json::json!({
@@ -80,8 +87,25 @@ mod tests {
     }
 
     #[test]
-    fn domain_invalid_input_maps_to_app_internal() {
+    fn domain_invalid_input_maps_to_app_bad_request() {
         let app_err: AppError = DomainError::InvalidInput("bad value".to_string()).into();
-        assert!(matches!(app_err, AppError::Internal(_)));
+        assert!(matches!(app_err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn bad_request_returns_400() {
+        let err = AppError::BadRequest("invalid field".to_string());
+        assert_eq!(
+            err.error_response().status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn bad_request_display() {
+        assert_eq!(
+            AppError::BadRequest("bad".to_string()).to_string(),
+            "Bad request: bad"
+        );
     }
 }
