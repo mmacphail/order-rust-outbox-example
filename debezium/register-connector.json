@@ -20,7 +20,7 @@
     "transforms.outbox.route.by.field": "aggregate_type",
     "transforms.outbox.route.topic.replacement": "public.commerce.order.c2.v1",
     "transforms.outbox.table.fields.additional.placement": "id:envelope:event_id,event_type:envelope,created_at:envelope:event_date",
-    "transforms.outbox.expand.json.payload": "true",
+    "transforms.outbox.table.expand.json.payload": "true",
     "key.converter": "org.apache.kafka.connect.storage.StringConverter",
     "value.converter": "io.confluent.connect.avro.AvroConverter",
     "value.converter.schema.registry.url": "http://schema-registry:8081"
