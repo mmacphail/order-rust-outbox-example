@@ -92,6 +92,7 @@ async fn register_debezium_connector(http: &Client) {
             "transforms.outbox.route.by.field": "aggregate_type",
             "transforms.outbox.route.topic.replacement": "public.commerce.order.c2.v1",
             "transforms.outbox.table.fields.additional.placement": "id:envelope:event_id,event_type:envelope,created_at:envelope:event_date",
+            "transforms.outbox.expand.json.payload": "true",
             "key.converter": "org.apache.kafka.connect.storage.StringConverter",
             "value.converter": "io.confluent.connect.avro.AvroConverter",
             "value.converter.schema.registry.url": "http://schema-registry:8081"
@@ -310,19 +311,22 @@ async fn test_create_order_event_reaches_kafka() {
             }
         };
 
-        // Extract the `payload` field (JSON string of the order event).
-        let json_str = match record.get("payload") {
-            Some(AvroValue::String(s)) => s.clone(),
-            _ => {
-                eprintln!("Avro record missing 'payload' string field");
+        // Extract the `payload` field. With `expand.json.payload=true` the
+        // EventRouter emits the JSONB payload as a nested Avro record rather
+        // than a raw JSON string. `apache_avro::from_value` converts any Avro
+        // value (record, map, string, …) to a `serde_json::Value`.
+        let payload_avro = match record.get("payload") {
+            Some(v) => v,
+            None => {
+                eprintln!("Avro record missing 'payload' field");
                 continue;
             }
         };
 
-        let event: Value = match serde_json::from_str(&json_str) {
+        let event: Value = match apache_avro::from_value(payload_avro) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("Failed to parse Kafka payload as JSON: {}", e);
+                eprintln!("Failed to convert Avro payload to JSON Value: {}", e);
                 continue;
             }
         };
