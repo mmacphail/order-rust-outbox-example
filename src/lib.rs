@@ -1,3 +1,4 @@
+pub mod avro;
 pub mod db;
 pub mod errors;
 pub mod handlers;

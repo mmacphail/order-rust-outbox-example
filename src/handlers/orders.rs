@@ -72,6 +72,16 @@ fn default_limit() -> i64 {
     20
 }
 
+impl ListOrdersParams {
+    /// Returns `(page, limit, offset)` after clamping inputs to valid ranges.
+    pub fn into_query_params(self) -> (i64, i64, i64) {
+        let page = self.page.max(1);
+        let limit = self.limit.clamp(1, 100);
+        let offset = (page - 1) * limit;
+        (page, limit, offset)
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ListOrdersResponse {
     pub items: Vec<OrderResponse>,
@@ -272,10 +282,7 @@ pub async fn list_orders(
     pool: web::Data<DbPool>,
     query: web::Query<ListOrdersParams>,
 ) -> Result<HttpResponse, AppError> {
-    let params = query.into_inner();
-    let page = params.page.max(1);
-    let limit = params.limit.clamp(1, 100);
-    let offset = (page - 1) * limit;
+    let (page, limit, offset) = query.into_inner().into_query_params();
 
     let result = web::block(move || {
         let mut conn = pool.get()?;
@@ -311,4 +318,167 @@ pub async fn list_orders(
     .map_err(|e| AppError::Internal(e.to_string()))??;
 
     Ok(HttpResponse::Ok().json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── default_page / default_limit ──────────────────────────────────────────
+
+    #[test]
+    fn default_page_is_one() {
+        assert_eq!(default_page(), 1);
+    }
+
+    #[test]
+    fn default_limit_is_twenty() {
+        assert_eq!(default_limit(), 20);
+    }
+
+    // ── ListOrdersParams deserialization ──────────────────────────────────────
+
+    #[test]
+    fn list_orders_params_uses_defaults_when_fields_absent() {
+        let params: ListOrdersParams =
+            serde_json::from_str("{}").expect("deserialize empty object");
+        assert_eq!(params.page, 1);
+        assert_eq!(params.limit, 20);
+    }
+
+    #[test]
+    fn list_orders_params_accepts_custom_values() {
+        let params: ListOrdersParams =
+            serde_json::from_str(r#"{"page":3,"limit":50}"#).expect("deserialize custom values");
+        assert_eq!(params.page, 3);
+        assert_eq!(params.limit, 50);
+    }
+
+    // ── ListOrdersParams::into_query_params ───────────────────────────────────
+
+    #[test]
+    fn page_below_one_is_clamped_to_one() {
+        let (page, _, _) = ListOrdersParams { page: 0, limit: 20 }.into_query_params();
+        assert_eq!(page, 1);
+    }
+
+    #[test]
+    fn limit_below_one_is_clamped_to_one() {
+        let (_, limit, _) = ListOrdersParams { page: 1, limit: 0 }.into_query_params();
+        assert_eq!(limit, 1);
+    }
+
+    #[test]
+    fn limit_above_one_hundred_is_clamped_to_one_hundred() {
+        let (_, limit, _) = ListOrdersParams {
+            page: 1,
+            limit: 999,
+        }
+        .into_query_params();
+        assert_eq!(limit, 100);
+    }
+
+    #[test]
+    fn offset_is_zero_for_first_page() {
+        let (_, _, offset) = ListOrdersParams { page: 1, limit: 20 }.into_query_params();
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn offset_advances_by_limit_each_page() {
+        let (_, _, offset) = ListOrdersParams { page: 3, limit: 25 }.into_query_params();
+        assert_eq!(offset, 50);
+    }
+
+    // ── CreateOrderRequest deserialization ────────────────────────────────────
+
+    #[test]
+    fn create_order_request_deserializes_with_lines() {
+        let customer = Uuid::new_v4();
+        let product = Uuid::new_v4();
+        let json = serde_json::json!({
+            "customer_id": customer,
+            "lines": [
+                {"product_id": product, "quantity": 2, "unit_price": "9.99"}
+            ]
+        });
+        let req: CreateOrderRequest =
+            serde_json::from_value(json).expect("deserialize CreateOrderRequest");
+        assert_eq!(req.customer_id, customer);
+        assert_eq!(req.lines.len(), 1);
+        assert_eq!(req.lines[0].product_id, product);
+        assert_eq!(req.lines[0].quantity, 2);
+        assert_eq!(req.lines[0].unit_price, "9.99");
+    }
+
+    #[test]
+    fn create_order_request_deserializes_with_empty_lines() {
+        let customer = Uuid::new_v4();
+        let json = serde_json::json!({"customer_id": customer, "lines": []});
+        let req: CreateOrderRequest =
+            serde_json::from_value(json).expect("deserialize CreateOrderRequest with empty lines");
+        assert_eq!(req.customer_id, customer);
+        assert!(req.lines.is_empty());
+    }
+
+    // ── Response serialization ────────────────────────────────────────────────
+
+    #[test]
+    fn order_response_serializes_to_json() {
+        let id = Uuid::new_v4();
+        let customer_id = Uuid::new_v4();
+        let resp = OrderResponse {
+            id,
+            customer_id,
+            status: "PENDING".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            lines: vec![],
+        };
+        let json = serde_json::to_value(&resp).expect("serialize OrderResponse");
+        assert_eq!(json["id"].as_str(), Some(id.to_string().as_str()));
+        assert_eq!(
+            json["customer_id"].as_str(),
+            Some(customer_id.to_string().as_str())
+        );
+        assert_eq!(json["status"].as_str(), Some("PENDING"));
+        assert_eq!(json["lines"].as_array().map(|a| a.len()), Some(0));
+    }
+
+    #[test]
+    fn order_line_response_serializes_to_json() {
+        let id = Uuid::new_v4();
+        let product_id = Uuid::new_v4();
+        let line = OrderLineResponse {
+            id,
+            product_id,
+            quantity: 3,
+            unit_price: "19.99".to_string(),
+        };
+        let json = serde_json::to_value(&line).expect("serialize OrderLineResponse");
+        assert_eq!(json["quantity"].as_i64(), Some(3));
+        assert_eq!(json["unit_price"].as_str(), Some("19.99"));
+    }
+
+    #[test]
+    fn create_order_response_serializes_id() {
+        let id = Uuid::new_v4();
+        let resp = CreateOrderResponse { id };
+        let json = serde_json::to_value(&resp).expect("serialize CreateOrderResponse");
+        assert_eq!(json["id"].as_str(), Some(id.to_string().as_str()));
+    }
+
+    #[test]
+    fn list_orders_response_serializes() {
+        let resp = ListOrdersResponse {
+            items: vec![],
+            total: 0,
+            page: 1,
+            limit: 20,
+        };
+        let json = serde_json::to_value(&resp).expect("serialize ListOrdersResponse");
+        assert_eq!(json["total"].as_i64(), Some(0));
+        assert_eq!(json["page"].as_i64(), Some(1));
+        assert_eq!(json["limit"].as_i64(), Some(20));
+        assert_eq!(json["items"].as_array().map(|a| a.len()), Some(0));
+    }
 }
