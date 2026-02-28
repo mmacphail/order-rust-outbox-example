@@ -31,5 +31,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Cache Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose.yml', 'debezium/Dockerfile') }}
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/docker-images/images.tar
+
+      - name: Pull and save Docker images
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          docker pull debezium/postgres:16
+          docker pull apache/kafka:4.0.0
+          docker pull confluentinc/cp-schema-registry:7.6.0
+          docker pull debezium/connect:2.6
+          mkdir -p /tmp/docker-images
+          docker save \
+            debezium/postgres:16 \
+            apache/kafka:4.0.0 \
+            confluentinc/cp-schema-registry:7.6.0 \
+            debezium/connect:2.6 \
+            -o /tmp/docker-images/images.tar
+
       - name: Run end-to-end tests
         run: ./scripts/run_e2e_tests.sh
