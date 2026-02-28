@@ -18,6 +18,10 @@ build-release:
 run:
     cargo run
 
+# Watch for file changes and re-run the service (requires cargo-watch: just install-watch)
+watch:
+    cargo watch -x run
+
 # Check the project for errors without producing a binary
 check:
     cargo check
@@ -104,6 +108,10 @@ create-test-order:
 # Copy .env.example to .env (skips if .env already exists)
 env:
     @if [ -f .env ]; then echo ".env already exists, skipping"; else cp .env.example .env && echo ".env created"; fi
+
+# Install cargo-watch (required for the watch recipe; run once after cloning)
+install-watch:
+    cargo install cargo-watch
 
 # Install git hooks (run once after cloning)
 install-hooks:
