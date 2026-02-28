@@ -1,2 +1,0 @@
-This file exists solely to trigger a CI run for cache validation.
-It can be safely deleted.
