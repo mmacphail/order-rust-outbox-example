@@ -323,7 +323,19 @@ async fn test_create_order_event_reaches_kafka() {
             }
         };
 
+        // `apache_avro::from_value` converts the Avro value to a serde_json::Value.
+        // When `expand.json.payload=true` works (JSON converter), `payload_avro`
+        // is already a record and `event` will be a Value::Object.
+        // With the Avro converter Debezium still emits the JSONB column as an
+        // Avro string, so `event` comes out as Value::String — unwrap that layer.
         let event: Value = match apache_avro::from_value(payload_avro) {
+            Ok(Value::String(s)) => match serde_json::from_str(&s) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Failed to parse payload string as JSON: {}", e);
+                    continue;
+                }
+            },
             Ok(v) => v,
             Err(e) => {
                 eprintln!("Failed to convert Avro payload to JSON Value: {}", e);
