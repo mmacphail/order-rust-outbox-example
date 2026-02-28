@@ -1,4 +1,6 @@
-# Copilot Instructions
+# CLAUDE.md – Project Context for Claude
+
+This file provides context to Claude (Anthropic AI) when working in this repository.
 
 ## Project Overview
 
