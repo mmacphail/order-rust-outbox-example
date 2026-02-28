@@ -61,7 +61,7 @@ jobs:
       - name: Generate coverage summary
         id: coverage
         run: |
-          SUMMARY=$(cargo llvm-cov report --summary-only 2>&1 | tail -4)
+          SUMMARY=$(cargo llvm-cov report --summary-only | grep -E "^(Filename|TOTAL)")
           echo "summary<<EOF" >> "$GITHUB_OUTPUT"
           echo "$SUMMARY" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
@@ -76,7 +76,7 @@ jobs:
 
       - name: Post coverage comment on PR
         if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@331f8f5b4f15f01f913e4622e63b7d1cda0da2ac  # v2.9.0
         with:
           header: coverage
           message: |
