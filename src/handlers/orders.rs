@@ -1,18 +1,15 @@
 use actix_web::{web, HttpResponse};
 use bigdecimal::BigDecimal;
-use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::str::FromStr;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::db::DbPool;
+use crate::application::order_service::OrderService;
+use crate::domain::order::OrderLineInput;
+use crate::domain::ports::OrderRepository;
 use crate::errors::AppError;
-use crate::models::order::NewOrder;
-use crate::models::order_line::NewOrderLine;
-use crate::models::outbox::NewOutboxEvent;
-use crate::schema::{commerce_order_outbox, order_lines, orders};
 
 // ── Request / response DTOs ──────────────────────────────────────────────────
 
@@ -73,12 +70,11 @@ fn default_limit() -> i64 {
 }
 
 impl ListOrdersParams {
-    /// Returns `(page, limit, offset)` after clamping inputs to valid ranges.
-    pub fn into_query_params(self) -> (i64, i64, i64) {
+    /// Returns `(page, limit)` after clamping inputs to valid ranges.
+    pub fn into_query_params(self) -> (i64, i64) {
         let page = self.page.max(1);
         let limit = self.limit.clamp(1, 100);
-        let offset = (page - 1) * limit;
-        (page, limit, offset)
+        (page, limit)
     }
 }
 
@@ -108,90 +104,38 @@ pub struct ListOrdersResponse {
     ),
     tag = "orders"
 )]
-pub async fn create_order(
-    pool: web::Data<DbPool>,
+pub async fn create_order<R: OrderRepository>(
+    service: web::Data<OrderService<R>>,
     body: web::Json<CreateOrderRequest>,
 ) -> Result<HttpResponse, AppError> {
     let body = body.into_inner();
+    let customer_id = body.customer_id;
 
-    let result = web::block(move || {
-        let mut conn = pool.get()?;
-
-        conn.transaction::<_, AppError, _>(|conn| {
-            // 1. Insert the order
-            let order_id = Uuid::new_v4();
-            let new_order = NewOrder {
-                id: order_id,
-                customer_id: body.customer_id,
-                status: "PENDING".to_string(),
-            };
-            diesel::insert_into(orders::table)
-                .values(&new_order)
-                .execute(conn)?;
-
-            // 2. Insert order lines
-            let new_lines: Result<Vec<NewOrderLine>, AppError> = body
-                .lines
-                .iter()
-                .map(|l| {
-                    let price = BigDecimal::from_str(&l.unit_price).map_err(|e| {
-                        AppError::Internal(format!("Invalid unit_price '{}': {}", l.unit_price, e))
-                    })?;
-                    Ok(NewOrderLine {
-                        id: Uuid::new_v4(),
-                        order_id,
-                        product_id: l.product_id,
-                        quantity: l.quantity,
-                        unit_price: price,
-                    })
-                })
-                .collect();
-            let new_lines = new_lines?;
-            diesel::insert_into(order_lines::table)
-                .values(&new_lines)
-                .execute(conn)?;
-
-            // 3. Build the outbox payload and insert the event.
-            //    Debezium's outbox event router will read this row via CDC and
-            //    publish the payload to the Kafka topic derived from
-            //    `aggregate_type` determines the Kafka topic via the EventRouter SMT.
-            let line_payloads: Vec<serde_json::Value> = body
-                .lines
-                .iter()
-                .map(|l| {
-                    json!({
-                        "product_id": l.product_id,
-                        "quantity": l.quantity,
-                        "unit_price": l.unit_price
-                    })
-                })
-                .collect();
-
-            let event_payload = json!({
-                "order_id": order_id,
-                "customer_id": body.customer_id,
-                "status": "PENDING",
-                "lines": line_payloads
-            });
-
-            let new_event = NewOutboxEvent {
-                id: Uuid::new_v4(),
-                aggregate_type: "Order".to_string(),
-                aggregate_id: order_id.to_string(),
-                event_type: "OrderCreated".to_string(),
-                payload: event_payload,
-            };
-            diesel::insert_into(commerce_order_outbox::table)
-                .values(&new_event)
-                .execute(conn)?;
-
-            Ok(order_id)
+    // BigDecimal parsing is a presentation-layer concern: validate here before
+    // handing off to the domain.
+    let lines: Result<Vec<OrderLineInput>, AppError> = body
+        .lines
+        .iter()
+        .map(|l| {
+            let unit_price = BigDecimal::from_str(&l.unit_price).map_err(|e| {
+                AppError::Internal(format!("Invalid unit_price '{}': {}", l.unit_price, e))
+            })?;
+            Ok(OrderLineInput {
+                product_id: l.product_id,
+                quantity: l.quantity,
+                unit_price,
+            })
         })
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))??;
+        .collect();
+    let lines = lines?;
 
-    Ok(HttpResponse::Created().json(json!({ "id": result })))
+    let svc = service.clone();
+    let id = web::block(move || svc.create_order(customer_id, lines))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(AppError::from)?;
+
+    Ok(HttpResponse::Created().json(json!({ "id": id })))
 }
 
 /// GET /orders/{id}
@@ -210,53 +154,38 @@ pub async fn create_order(
     ),
     tag = "orders"
 )]
-pub async fn get_order(
-    pool: web::Data<DbPool>,
+pub async fn get_order<R: OrderRepository>(
+    service: web::Data<OrderService<R>>,
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let order_id = path.into_inner();
 
-    let result = web::block(move || {
-        let mut conn = pool.get()?;
-
-        let order = orders::table
-            .filter(orders::id.eq(order_id))
-            .select(crate::models::order::Order::as_select())
-            .first(&mut conn)
-            .optional()?;
-
-        let Some(order) = order else {
-            return Ok::<_, AppError>(None);
-        };
-
-        let lines = order_lines::table
-            .filter(order_lines::order_id.eq(order.id))
-            .select(crate::models::order_line::OrderLine::as_select())
-            .load(&mut conn)?;
-
-        let line_responses: Vec<OrderLineResponse> = lines
-            .into_iter()
-            .map(|l| OrderLineResponse {
-                id: l.id,
-                product_id: l.product_id,
-                quantity: l.quantity,
-                unit_price: l.unit_price.to_string(),
-            })
-            .collect();
-
-        Ok(Some(OrderResponse {
-            id: order.id,
-            customer_id: order.customer_id,
-            status: order.status,
-            created_at: order.created_at.to_rfc3339(),
-            lines: line_responses,
-        }))
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))??;
+    let svc = service.clone();
+    let result = web::block(move || svc.get_order(order_id))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(AppError::from)?;
 
     match result {
-        Some(order) => Ok(HttpResponse::Ok().json(order)),
+        Some(order) => {
+            let line_responses: Vec<OrderLineResponse> = order
+                .lines
+                .into_iter()
+                .map(|l| OrderLineResponse {
+                    id: l.id,
+                    product_id: l.product_id,
+                    quantity: l.quantity,
+                    unit_price: l.unit_price.to_string(),
+                })
+                .collect();
+            Ok(HttpResponse::Ok().json(OrderResponse {
+                id: order.id,
+                customer_id: order.customer_id,
+                status: order.status,
+                created_at: order.created_at.to_rfc3339(),
+                lines: line_responses,
+            }))
+        }
         None => Err(AppError::NotFound),
     }
 }
@@ -278,46 +207,36 @@ pub async fn get_order(
     ),
     tag = "orders"
 )]
-pub async fn list_orders(
-    pool: web::Data<DbPool>,
+pub async fn list_orders<R: OrderRepository>(
+    service: web::Data<OrderService<R>>,
     query: web::Query<ListOrdersParams>,
 ) -> Result<HttpResponse, AppError> {
-    let (page, limit, offset) = query.into_inner().into_query_params();
+    let (page, limit) = query.into_inner().into_query_params();
 
-    let result = web::block(move || {
-        let mut conn = pool.get()?;
+    let svc = service.clone();
+    let result = web::block(move || svc.list_orders(page, limit))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(AppError::from)?;
 
-        let total: i64 = orders::table.count().get_result(&mut conn)?;
-
-        let rows = orders::table
-            .select(crate::models::order::Order::as_select())
-            .order(orders::created_at.desc())
-            .limit(limit)
-            .offset(offset)
-            .load(&mut conn)?;
-
-        let items: Vec<OrderResponse> = rows
-            .into_iter()
-            .map(|o| OrderResponse {
-                id: o.id,
-                customer_id: o.customer_id,
-                status: o.status,
-                created_at: o.created_at.to_rfc3339(),
-                lines: vec![],
-            })
-            .collect();
-
-        Ok::<_, AppError>(ListOrdersResponse {
-            items,
-            total,
-            page,
-            limit,
+    let items: Vec<OrderResponse> = result
+        .items
+        .into_iter()
+        .map(|o| OrderResponse {
+            id: o.id,
+            customer_id: o.customer_id,
+            status: o.status,
+            created_at: o.created_at.to_rfc3339(),
+            lines: vec![],
         })
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))??;
+        .collect();
 
-    Ok(HttpResponse::Ok().json(result))
+    Ok(HttpResponse::Ok().json(ListOrdersResponse {
+        items,
+        total: result.total,
+        page,
+        limit,
+    }))
 }
 
 #[cfg(test)]
@@ -358,19 +277,19 @@ mod tests {
 
     #[test]
     fn page_below_one_is_clamped_to_one() {
-        let (page, _, _) = ListOrdersParams { page: 0, limit: 20 }.into_query_params();
+        let (page, _) = ListOrdersParams { page: 0, limit: 20 }.into_query_params();
         assert_eq!(page, 1);
     }
 
     #[test]
     fn limit_below_one_is_clamped_to_one() {
-        let (_, limit, _) = ListOrdersParams { page: 1, limit: 0 }.into_query_params();
+        let (_, limit) = ListOrdersParams { page: 1, limit: 0 }.into_query_params();
         assert_eq!(limit, 1);
     }
 
     #[test]
     fn limit_above_one_hundred_is_clamped_to_one_hundred() {
-        let (_, limit, _) = ListOrdersParams {
+        let (_, limit) = ListOrdersParams {
             page: 1,
             limit: 999,
         }
@@ -380,13 +299,15 @@ mod tests {
 
     #[test]
     fn offset_is_zero_for_first_page() {
-        let (_, _, offset) = ListOrdersParams { page: 1, limit: 20 }.into_query_params();
+        let (page, limit) = ListOrdersParams { page: 1, limit: 20 }.into_query_params();
+        let offset = (page - 1) * limit;
         assert_eq!(offset, 0);
     }
 
     #[test]
     fn offset_advances_by_limit_each_page() {
-        let (_, _, offset) = ListOrdersParams { page: 3, limit: 25 }.into_query_params();
+        let (page, limit) = ListOrdersParams { page: 3, limit: 25 }.into_query_params();
+        let offset = (page - 1) * limit;
         assert_eq!(offset, 50);
     }
 
@@ -480,5 +401,265 @@ mod tests {
         assert_eq!(json["page"].as_i64(), Some(1));
         assert_eq!(json["limit"].as_i64(), Some(20));
         assert_eq!(json["items"].as_array().map(|a| a.len()), Some(0));
+    }
+
+    // ── Handler tests (in-memory stub, no Docker) ─────────────────────────────
+
+    use actix_web::{http::StatusCode, test as actix_test, App};
+    use bigdecimal::BigDecimal;
+    use chrono::Utc;
+
+    use crate::domain::errors::DomainError;
+    use crate::domain::order::{ListResult, OrderLineView, OrderView};
+
+    struct InMemoryOrderRepo {
+        find_result: Option<OrderView>,
+        create_error: Option<String>,
+    }
+
+    impl Default for InMemoryOrderRepo {
+        fn default() -> Self {
+            Self {
+                find_result: None,
+                create_error: None,
+            }
+        }
+    }
+
+    impl OrderRepository for InMemoryOrderRepo {
+        fn create(
+            &self,
+            _customer_id: Uuid,
+            _lines: Vec<OrderLineInput>,
+        ) -> Result<Uuid, DomainError> {
+            if let Some(msg) = &self.create_error {
+                return Err(DomainError::Internal(msg.clone()));
+            }
+            Ok(Uuid::new_v4())
+        }
+
+        fn find_by_id(&self, _id: Uuid) -> Result<Option<OrderView>, DomainError> {
+            Ok(self.find_result.clone())
+        }
+
+        fn list(&self, page: i64, limit: i64) -> Result<ListResult, DomainError> {
+            Ok(ListResult {
+                items: vec![OrderView {
+                    id: Uuid::new_v4(),
+                    customer_id: Uuid::new_v4(),
+                    status: "PENDING".to_string(),
+                    created_at: Utc::now(),
+                    lines: vec![],
+                }],
+                total: 1,
+            })
+            .map(|mut r| {
+                // Respect page/limit for the test (trim to empty if out of range)
+                if page > 1 {
+                    r.items.clear();
+                    r.total = 0;
+                }
+                let _ = limit; // limit is validated by the handler before reaching the repo
+                r
+            })
+        }
+    }
+
+    fn make_service<R: OrderRepository>(repo: R) -> web::Data<OrderService<R>> {
+        web::Data::new(OrderService::new(repo))
+    }
+
+    #[actix_web::test]
+    async fn create_order_returns_201_with_id() {
+        let svc = make_service(InMemoryOrderRepo::default());
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::post().to(create_order::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::post()
+            .uri("/orders")
+            .set_json(serde_json::json!({
+                "customer_id": Uuid::new_v4(),
+                "lines": [{"product_id": Uuid::new_v4(), "quantity": 1, "unit_price": "9.99"}]
+            }))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "expected 201 Created for a valid order"
+        );
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert!(
+            body["id"].is_string(),
+            "response body must contain an 'id' field"
+        );
+    }
+
+    #[actix_web::test]
+    async fn create_order_with_invalid_unit_price_returns_500() {
+        let svc = make_service(InMemoryOrderRepo::default());
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::post().to(create_order::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::post()
+            .uri("/orders")
+            .set_json(serde_json::json!({
+                "customer_id": Uuid::new_v4(),
+                "lines": [{"product_id": Uuid::new_v4(), "quantity": 1, "unit_price": "not-a-number"}]
+            }))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid unit_price should yield 500"
+        );
+    }
+
+    #[actix_web::test]
+    async fn create_order_returns_500_on_repo_internal_error() {
+        let repo = InMemoryOrderRepo {
+            create_error: Some("db unavailable".to_string()),
+            ..Default::default()
+        };
+        let svc = make_service(repo);
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::post().to(create_order::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::post()
+            .uri("/orders")
+            .set_json(serde_json::json!({
+                "customer_id": Uuid::new_v4(),
+                "lines": [{"product_id": Uuid::new_v4(), "quantity": 1, "unit_price": "5.00"}]
+            }))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "repo Internal error should propagate as 500"
+        );
+    }
+
+    #[actix_web::test]
+    async fn get_order_returns_404_for_unknown_id() {
+        let svc = make_service(InMemoryOrderRepo::default()); // find_result = None
+        let app = actix_test::init_service(App::new().app_data(svc).route(
+            "/orders/{id}",
+            web::get().to(get_order::<InMemoryOrderRepo>),
+        ))
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri(&format!("/orders/{}", Uuid::new_v4()))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "unknown order id should yield 404"
+        );
+    }
+
+    #[actix_web::test]
+    async fn get_order_returns_200_with_lines() {
+        let order_id = Uuid::new_v4();
+        let customer_id = Uuid::new_v4();
+        let product_id = Uuid::new_v4();
+        let line_id = Uuid::new_v4();
+
+        let repo = InMemoryOrderRepo {
+            find_result: Some(OrderView {
+                id: order_id,
+                customer_id,
+                status: "PENDING".to_string(),
+                created_at: Utc::now(),
+                lines: vec![OrderLineView {
+                    id: line_id,
+                    product_id,
+                    quantity: 2,
+                    unit_price: BigDecimal::from_str("9.99").expect("valid decimal"),
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let svc = make_service(repo);
+        let app = actix_test::init_service(App::new().app_data(svc).route(
+            "/orders/{id}",
+            web::get().to(get_order::<InMemoryOrderRepo>),
+        ))
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri(&format!("/orders/{}", order_id))
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "existing order should yield 200"
+        );
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert_eq!(
+            body["id"].as_str(),
+            Some(order_id.to_string().as_str()),
+            "response id must match"
+        );
+        let lines = body["lines"].as_array().expect("lines must be an array");
+        assert_eq!(lines.len(), 1, "expected one order line");
+        assert_eq!(lines[0]["quantity"].as_i64(), Some(2));
+        assert_eq!(lines[0]["unit_price"].as_str(), Some("9.99"));
+    }
+
+    #[actix_web::test]
+    async fn list_orders_returns_200_with_pagination_envelope() {
+        let svc = make_service(InMemoryOrderRepo::default());
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(svc)
+                .route("/orders", web::get().to(list_orders::<InMemoryOrderRepo>)),
+        )
+        .await;
+
+        let req = actix_test::TestRequest::get()
+            .uri("/orders?page=1&limit=10")
+            .to_request();
+
+        let resp = actix_test::call_service(&app, req).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "list orders should yield 200"
+        );
+        let body: serde_json::Value = actix_test::read_body_json(resp).await;
+        assert!(
+            body["items"].is_array(),
+            "response must contain items array"
+        );
+        assert!(body["total"].is_number(), "response must contain total");
+        assert_eq!(body["page"].as_i64(), Some(1), "page must be echoed back");
+        assert_eq!(
+            body["limit"].as_i64(),
+            Some(10),
+            "limit must be echoed back"
+        );
     }
 }

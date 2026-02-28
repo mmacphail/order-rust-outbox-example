@@ -1,19 +1,24 @@
 use actix_web::HttpResponse;
 use thiserror::Error;
 
+use crate::domain::errors::DomainError;
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("Not found")]
     NotFound,
 
-    #[error("Database error: {0}")]
-    DatabaseError(#[from] diesel::result::Error),
-
-    #[error("Connection pool error: {0}")]
-    PoolError(#[from] r2d2::Error),
-
     #[error("Internal error: {0}")]
     Internal(String),
+}
+
+impl From<DomainError> for AppError {
+    fn from(e: DomainError) -> Self {
+        match e {
+            DomainError::NotFound => AppError::NotFound,
+            DomainError::InvalidInput(msg) | DomainError::Internal(msg) => AppError::Internal(msg),
+        }
+    }
 }
 
 impl actix_web::ResponseError for AppError {
@@ -22,11 +27,9 @@ impl actix_web::ResponseError for AppError {
             AppError::NotFound => HttpResponse::NotFound().json(serde_json::json!({
                 "error": self.to_string()
             })),
-            AppError::DatabaseError(_) | AppError::PoolError(_) | AppError::Internal(_) => {
-                HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": "Internal server error"
-                }))
-            }
+            AppError::Internal(_) => HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Internal server error"
+            })),
         }
     }
 }
@@ -40,15 +43,6 @@ mod tests {
     fn not_found_returns_404() {
         let resp = AppError::NotFound.error_response();
         assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn database_error_returns_500() {
-        let err = AppError::DatabaseError(diesel::result::Error::NotFound);
-        assert_eq!(
-            err.error_response().status(),
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
-        );
     }
 
     #[test]
@@ -74,24 +68,20 @@ mod tests {
     }
 
     #[test]
-    fn database_error_display() {
-        let err = AppError::DatabaseError(diesel::result::Error::NotFound);
-        assert!(
-            err.to_string().starts_with("Database error:"),
-            "expected display to start with 'Database error:', got: {}",
-            err
-        );
+    fn domain_not_found_maps_to_app_not_found() {
+        let app_err: AppError = DomainError::NotFound.into();
+        assert!(matches!(app_err, AppError::NotFound));
     }
 
     #[test]
-    fn from_diesel_not_found_wraps_as_database_error() {
-        let app_err: AppError = diesel::result::Error::NotFound.into();
-        assert!(matches!(app_err, AppError::DatabaseError(_)));
+    fn domain_internal_maps_to_app_internal() {
+        let app_err: AppError = DomainError::Internal("oops".to_string()).into();
+        assert!(matches!(app_err, AppError::Internal(_)));
     }
 
     #[test]
-    fn from_diesel_database_error_converts() {
-        let app_err: AppError = diesel::result::Error::RollbackTransaction.into();
-        assert!(matches!(app_err, AppError::DatabaseError(_)));
+    fn domain_invalid_input_maps_to_app_internal() {
+        let app_err: AppError = DomainError::InvalidInput("bad value".to_string()).into();
+        assert!(matches!(app_err, AppError::Internal(_)));
     }
 }
