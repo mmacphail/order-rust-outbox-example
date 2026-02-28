@@ -1,14 +1,19 @@
+pub mod application;
 pub mod avro;
 pub mod db;
+pub mod domain;
 pub mod errors;
 pub mod handlers;
-pub mod models;
+pub mod infrastructure;
 pub mod schema;
 
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+use application::order_service::OrderService;
+use infrastructure::order_repo::DieselOrderRepository;
 
 pub use db::{create_pool, DbPool};
 
@@ -61,17 +66,27 @@ pub fn build_server(
 ) -> std::io::Result<actix_web::dev::Server> {
     let openapi = ApiDoc::openapi();
     Ok(HttpServer::new(move || {
+        let service = web::Data::new(OrderService::new(DieselOrderRepository::new(pool.clone())));
         App::new()
-            .app_data(web::Data::new(pool.clone()))
+            .app_data(service)
             .wrap(Logger::default())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-docs/openapi.json", openapi.clone()),
             )
             .service(
                 web::scope("/orders")
-                    .route("", web::post().to(handlers::orders::create_order))
-                    .route("", web::get().to(handlers::orders::list_orders))
-                    .route("/{id}", web::get().to(handlers::orders::get_order)),
+                    .route(
+                        "",
+                        web::post().to(handlers::orders::create_order::<DieselOrderRepository>),
+                    )
+                    .route(
+                        "",
+                        web::get().to(handlers::orders::list_orders::<DieselOrderRepository>),
+                    )
+                    .route(
+                        "/{id}",
+                        web::get().to(handlers::orders::get_order::<DieselOrderRepository>),
+                    ),
             )
     })
     .bind((host.to_string(), port))?
